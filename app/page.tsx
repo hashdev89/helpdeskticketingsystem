@@ -93,10 +93,10 @@ interface Ticket {
 }
 
 interface WhatsAppMessage {
-  message_type: any;
-  created_at: any;
-  to_number: any;
-  from_number: any;
+  message_type: string;
+  created_at: string;
+  to_number: string;
+  from_number: string;
   id: string;
   from: string;
   to: string;
@@ -323,10 +323,10 @@ export default function WhatsAppHelpDesk() {
           type: payload.new.message_type,
           status: payload.new.status,
           isStatusUpdate: payload.new.is_status_update,
-          message_type: undefined,
-          created_at: undefined,
-          to_number: undefined,
-          from_number: undefined
+          message_type: 'incoming',
+          created_at: new Date().toISOString(),
+          to_number: simulatedWhatsAppNumber,
+          from_number: simulatedPhone
         };
         setWhatsappMessages(prev => [...prev, newMessage]);
       }
@@ -594,10 +594,10 @@ export default function WhatsAppHelpDesk() {
         body: simulatedMessage,
         timestamp: new Date().toISOString(),
         type: 'incoming',
-        message_type: undefined,
-        created_at: undefined,
-        to_number: undefined,
-        from_number: undefined
+        message_type: 'incoming',
+        created_at: new Date().toISOString(),
+        to_number: simulatedWhatsAppNumber,
+        from_number: simulatedPhone
       };
 
       const newTicket = await createTicketFromWhatsApp(incomingMessage, simulatedName, simulatedWhatsAppNumber);
