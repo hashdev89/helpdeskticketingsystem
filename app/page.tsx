@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   MessageSquare, 
   Users, 
@@ -83,16 +83,20 @@ interface Ticket {
   priority: string;
   category: string;
   assigned_to: string;
-  assigned_agent_id: string;
+  assigned_agent_id?: string | null;
   created_at: string;
   updated_at: string;
   tags: string[];
   channel: string;
-  whatsapp_number: string;
+  whatsapp_number?: string;
   statusHistory: StatusHistoryItem[];
 }
 
 interface WhatsAppMessage {
+  message_type: any;
+  created_at: any;
+  to_number: any;
+  from_number: any;
   id: string;
   from: string;
   to: string;
@@ -101,6 +105,53 @@ interface WhatsAppMessage {
   type: string;
   status?: string;
   isStatusUpdate?: boolean;
+}
+
+// Define proper types for database operations
+interface DatabaseError {
+  message: string;
+}
+
+interface StatusHistoryData {
+  status: string;
+  created_at: string;
+  updated_by: string;
+  note: string;
+}
+
+interface TicketData {
+  id: string;
+  customer_name: string;
+  customer_phone: string;
+  customer_email?: string | null;
+  subject: string;
+  message: string;
+  status: string;
+  priority: string;
+  category: string;
+  assigned_to?: string;
+  assigned_agent_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  tags: string[];
+  channel: string;
+  whatsapp_number?: string | null;
+  assigned_agent?: { name: string } | null;
+  status_history?: StatusHistoryData[];
+}
+
+interface MessagePayload {
+  eventType: string;
+  new: {
+    id: string;
+    from_number: string;
+    to_number: string;
+    body: string;
+    created_at: string;
+    message_type: string;
+    status: string;
+    is_status_update: boolean;
+  };
 }
 
 export default function WhatsAppHelpDesk() {
@@ -148,10 +199,112 @@ export default function WhatsAppHelpDesk() {
     tags: ''
   });
 
+  // Database functions with proper error handling
+  const loadAgents = useCallback(async () => {
+    try {
+      const data = await agentsService.getAll();
+      setAgents(data);
+    } catch (err) {
+      const error = err as DatabaseError;
+      console.error('Error loading agents:', error);
+      throw error;
+    }
+  }, []);
+
+  const loadWhatsappNumbers = useCallback(async () => {
+    try {
+      const data = await whatsappNumbersService.getAll();
+      setWhatsappNumbers(data);
+    } catch (err) {
+      const error = err as DatabaseError;
+      console.error('Error loading WhatsApp numbers:', error);
+      throw error;
+    }
+  }, []);
+
+  const loadTickets = useCallback(async () => {
+    try {
+      const data: TicketData[] = await ticketsService.getAll();
+      // Transform the data to match the component's expected format
+      const transformedTickets: Ticket[] = data.map(ticket => ({
+        ...ticket,
+        customer_email: ticket.customer_email || undefined,
+        whatsapp_number: ticket.whatsapp_number || undefined,
+        assigned_to: ticket.assigned_agent?.name || 'Unassigned',
+        statusHistory: ticket.status_history?.map((sh: StatusHistoryData) => ({
+          status: sh.status,
+          timestamp: sh.created_at,
+          updated_by: sh.updated_by,
+          note: sh.note
+        })) || []
+      }));
+      setTickets(transformedTickets);
+    } catch (err) {
+      const error = err as DatabaseError;
+      console.error('Error loading tickets:', error);
+      throw error;
+    }
+  }, []);
+
+  const loadMessages = useCallback(async () => {
+    try {
+      // Load all messages
+      const allTickets: TicketData[] = await ticketsService.getAll();
+      let allMessages: WhatsAppMessage[] = [];
+      
+      for (const ticket of allTickets) {
+        if (ticket.channel === 'whatsapp') {
+          const messages = await whatsappMessagesService.getByTicketId(ticket.id);
+          allMessages = [...allMessages, ...messages];
+        }
+      }
+      
+      // Transform to match component format
+      const transformedMessages: WhatsAppMessage[] = allMessages.map(msg => ({
+        id: msg.id,
+        message_type: msg.message_type,
+        created_at: msg.created_at,
+        to_number: msg.to_number,
+        from_number: msg.from_number,
+        from: msg.from_number,
+        to: msg.to_number,
+        body: msg.body,
+        timestamp: msg.created_at,
+        type: msg.message_type,
+        status: msg.status,
+        isStatusUpdate: msg.isStatusUpdate
+      }));
+      
+      setWhatsappMessages(transformedMessages);
+    } catch (err) {
+      const error = err as DatabaseError;
+      console.error('Error loading messages:', error);
+      throw error;
+    }
+  }, []);
+
+  const loadInitialData = useCallback(async () => {
+    try {
+      setLoading(true);
+      await Promise.all([
+        loadAgents(),
+        loadWhatsappNumbers(),
+        loadTickets(),
+        loadMessages()
+      ]);
+    } catch (err) {
+      const error = err as DatabaseError;
+      setError(error.message);
+      console.error('Error loading initial data:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [loadAgents, loadWhatsappNumbers, loadTickets, loadMessages]);
+
   useEffect(() => {
     setIsClient(true);
     loadInitialData();
-  }, []);
+  }, [loadInitialData]);
 
   // Set up real-time subscriptions
   useEffect(() => {
@@ -159,9 +312,9 @@ export default function WhatsAppHelpDesk() {
       loadTickets();
     });
 
-    const messageSubscription = subscriptions.subscribeToMessages((payload: { eventType: string; new: { id: any; from_number: any; to_number: any; body: any; created_at: any; message_type: any; status: any; is_status_update: any; }; }) => {
+    const messageSubscription = subscriptions.subscribeToMessages((payload: MessagePayload) => {
       if (payload.eventType === 'INSERT') {
-        const newMessage = {
+        const newMessage: WhatsAppMessage = {
           id: payload.new.id,
           from: payload.new.from_number,
           to: payload.new.to_number,
@@ -169,7 +322,11 @@ export default function WhatsAppHelpDesk() {
           timestamp: payload.new.created_at,
           type: payload.new.message_type,
           status: payload.new.status,
-          isStatusUpdate: payload.new.is_status_update
+          isStatusUpdate: payload.new.is_status_update,
+          message_type: undefined,
+          created_at: undefined,
+          to_number: undefined,
+          from_number: undefined
         };
         setWhatsappMessages(prev => [...prev, newMessage]);
       }
@@ -184,14 +341,14 @@ export default function WhatsAppHelpDesk() {
       messageSubscription.unsubscribe();
       agentSubscription.unsubscribe();
     };
-  }, []);
+  }, [loadTickets, loadAgents]);
 
   // Set default WhatsApp number when numbers are loaded
   useEffect(() => {
     if (whatsappNumbers.length > 0 && !simulatedWhatsAppNumber) {
       setSimulatedWhatsAppNumber(whatsappNumbers[0].number);
     }
-  }, [whatsappNumbers]);
+  }, [whatsappNumbers, simulatedWhatsAppNumber]);
 
   // Update selected ticket when tickets change
   useEffect(() => {
@@ -202,97 +359,6 @@ export default function WhatsAppHelpDesk() {
       }
     }
   }, [tickets, selectedTicket]);
-
-  // Database functions
-  const loadInitialData = async () => {
-    try {
-      setLoading(true);
-      await Promise.all([
-        loadAgents(),
-        loadWhatsappNumbers(),
-        loadTickets(),
-        loadMessages()
-      ]);
-    } catch (err: any) {
-      setError(err.message);
-      console.error('Error loading initial data:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadAgents = async () => {
-    try {
-      const data = await agentsService.getAll();
-      setAgents(data);
-    } catch (err: any) {
-      console.error('Error loading agents:', err);
-      throw err;
-    }
-  };
-
-  const loadWhatsappNumbers = async () => {
-    try {
-      const data = await whatsappNumbersService.getAll();
-      setWhatsappNumbers(data);
-    } catch (err: any) {
-      console.error('Error loading WhatsApp numbers:', err);
-      throw err;
-    }
-  };
-
-  const loadTickets = async () => {
-    try {
-      const data = await ticketsService.getAll();
-      // Transform the data to match the component's expected format
-      const transformedTickets = data.map(ticket => ({
-        ...ticket,
-        assigned_to: ticket.assigned_agent?.name || 'Unassigned',
-        statusHistory: ticket.status_history?.map((sh: any) => ({
-          status: sh.status,
-          timestamp: sh.created_at,
-          updated_by: sh.updated_by,
-          note: sh.note
-        })) || []
-      }));
-      setTickets(transformedTickets);
-    } catch (err: any) {
-      console.error('Error loading tickets:', err);
-      throw err;
-    }
-  };
-
-  const loadMessages = async () => {
-    try {
-      // Load all messages
-      const allTickets = await ticketsService.getAll();
-      let allMessages: any[] = [];
-      
-      for (const ticket of allTickets) {
-        if (ticket.channel === 'whatsapp') {
-          const messages = await whatsappMessagesService.getByTicketId(ticket.id);
-          allMessages = [...allMessages, ...messages];
-        }
-      }
-      
-      // Transform to match component format
-      const transformedMessages = allMessages.map(msg => ({
-        id: msg.id,
-        from: msg.from_number,
-        to: msg.to_number,
-        body: msg.body,
-        timestamp: msg.created_at,
-        type: msg.message_type,
-        status: msg.status,
-        isStatusUpdate: msg.is_status_update
-      }));
-      
-      setWhatsappMessages(transformedMessages);
-    } catch (err: any) {
-      console.error('Error loading messages:', err);
-      throw err;
-    }
-  };
 
   // Helper function to get agent for assignment
   const getAgentForAssignment = (category: string, whatsappNumber?: string): Agent | undefined => {
@@ -331,7 +397,6 @@ export default function WhatsAppHelpDesk() {
 
     try {
       const ticketId = await ticketsService.getNextTicketNumber();
-      const currentTime = new Date().toISOString();
       
       const assignedAgent = manualTicketForm.assignedAgentId 
         ? agents.find(a => a.id === manualTicketForm.assignedAgentId)
@@ -394,12 +459,12 @@ export default function WhatsAppHelpDesk() {
       await loadMessages();
 
       // Set as selected ticket
-      const transformedTicket = {
+      const transformedTicket: Ticket = {
         ...createdTicket,
         assigned_to: assignedAgent?.name || 'Unassigned',
         statusHistory: [{
           status: 'open',
-          timestamp: currentTime,
+          timestamp: new Date().toISOString(),
           updated_by: 'Manual Entry',
           note: assignedAgent ? `Manually created and assigned to ${assignedAgent.name}` : 'Manually created - no agent assigned'
         }]
@@ -421,8 +486,9 @@ export default function WhatsAppHelpDesk() {
         whatsappNumber: '',
         tags: ''
       });
-    } catch (err: any) {
-      alert('Error creating ticket: ' + err.message);
+    } catch (err) {
+      const error = err as DatabaseError;
+      alert('Error creating ticket: ' + error.message);
     }
   };
 
@@ -510,9 +576,10 @@ export default function WhatsAppHelpDesk() {
           note: assignedAgent ? `Auto-assigned to ${assignedAgent.name}` : 'No agents available for assignment'
         }]
       };
-    } catch (err: any) {
-      console.error('Error creating ticket from WhatsApp:', err);
-      throw err;
+    } catch (err) {
+      const error = err as DatabaseError;
+      console.error('Error creating ticket from WhatsApp:', error);
+      throw error;
     }
   };
 
@@ -520,14 +587,17 @@ export default function WhatsAppHelpDesk() {
     if (!simulatedMessage.trim()) return;
 
     try {
-      const currentTime = new Date().toISOString();
       const incomingMessage: WhatsAppMessage = {
         id: `incoming_${Date.now()}`,
         from: simulatedPhone,
         to: simulatedWhatsAppNumber,
         body: simulatedMessage,
-        timestamp: currentTime,
-        type: 'incoming'
+        timestamp: new Date().toISOString(),
+        type: 'incoming',
+        message_type: undefined,
+        created_at: undefined,
+        to_number: undefined,
+        from_number: undefined
       };
 
       const newTicket = await createTicketFromWhatsApp(incomingMessage, simulatedName, simulatedWhatsAppNumber);
@@ -538,8 +608,9 @@ export default function WhatsAppHelpDesk() {
       setTimeout(() => {
         setSelectedTicket(newTicket);
       }, 500);
-    } catch (err: any) {
-      alert('Error creating ticket from WhatsApp: ' + err.message);
+    } catch (err) {
+      const error = err as DatabaseError;
+      alert('Error creating ticket from WhatsApp: ' + error.message);
     }
   };
 
@@ -547,7 +618,6 @@ export default function WhatsAppHelpDesk() {
     if (!selectedTicket || !replyMessage.trim()) return;
     
     try {
-      const currentTime = new Date().toISOString();
       const newMessage = {
         id: `msg_${Date.now()}`,
         ticket_id: selectedTicket.id,
@@ -574,8 +644,9 @@ export default function WhatsAppHelpDesk() {
       }, 3000);
 
       await loadMessages();
-    } catch (err: any) {
-      alert('Error sending reply: ' + err.message);
+    } catch (err) {
+      const error = err as DatabaseError;
+      alert('Error sending reply: ' + error.message);
     }
   };
 
@@ -619,8 +690,9 @@ export default function WhatsAppHelpDesk() {
       // Refresh data
       await loadTickets();
       await loadMessages();
-    } catch (err: any) {
-      alert('Error updating ticket status: ' + err.message);
+    } catch (err) {
+      const error = err as DatabaseError;
+      alert('Error updating ticket status: ' + error.message);
     }
   };
 
@@ -655,17 +727,19 @@ export default function WhatsAppHelpDesk() {
       // Refresh data
       await loadTickets();
       await loadAgents();
-    } catch (err: any) {
-      alert('Error reassigning ticket: ' + err.message);
+    } catch (err) {
+      const error = err as DatabaseError;
+      alert('Error reassigning ticket: ' + error.message);
     }
   };
 
-  const updateAgent = async (agentId: string, updates: any) => {
+  const updateAgent = async (agentId: string, updates: Partial<Agent>) => {
     try {
       await agentsService.update(agentId, updates);
       await loadAgents();
-    } catch (err: any) {
-      alert('Error updating agent: ' + err.message);
+    } catch (err) {
+      const error = err as DatabaseError;
+      alert('Error updating agent: ' + error.message);
     }
   };
 
