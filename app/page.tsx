@@ -1,6 +1,9 @@
 "use client"
 
 import React, { useState, useEffect, useCallback } from 'react';
+import Notification from './components/Notification';
+import { useNotification } from '../hooks/useNotification';
+
 import { 
   MessageSquare, 
   Users, 
@@ -39,7 +42,7 @@ import {
   statusHistoryService, 
   whatsappMessagesService,
   subscriptions 
-} from '../lib/supabase';
+} from '../lib/supabase.js';
 
 // Type definitions
 interface WhatsAppNumber {
@@ -155,6 +158,17 @@ interface MessagePayload {
 }
 
 export default function WhatsAppHelpDesk() {
+  // Notification system
+  const {
+    notification,
+    showNotification,
+    hideNotification,
+    showSuccess,
+    showError,
+    showWarning,
+    showInfo
+  } = useNotification();
+
   // Client-side only flag to prevent hydration issues
   const [isClient, setIsClient] = useState(false);
   
@@ -177,6 +191,18 @@ export default function WhatsAppHelpDesk() {
   const [showIncomingMessage, setShowIncomingMessage] = useState(false);
   const [showWhatsAppSetup, setShowWhatsAppSetup] = useState(false);
   const [showManualTicketForm, setShowManualTicketForm] = useState(false);
+  // Add Agent modal state
+  const [showAddAgentForm, setShowAddAgentForm] = useState(false);
+  const [addAgentForm, setAddAgentForm] = useState({
+    name: '',
+    email: '',
+    role: 'agent',
+    expertise: '',
+    whatsappNumbers: '',
+    maxTickets: 10,
+    isActive: true
+  });
+  const [addingAgent, setAddingAgent] = useState(false);
   
   // Simulation state
   const [simulatedMessage, setSimulatedMessage] = useState('');
@@ -198,6 +224,8 @@ export default function WhatsAppHelpDesk() {
     whatsappNumber: '',
     tags: ''
   });
+  // Track ticket creation loading state
+  const [creatingTicket, setCreatingTicket] = useState(false);
 
   // Database functions with proper error handling
   const loadAgents = useCallback(async () => {
@@ -391,10 +419,10 @@ export default function WhatsAppHelpDesk() {
   // Create manual ticket
   const createManualTicket = async () => {
     if (!manualTicketForm.customerName.trim() || !manualTicketForm.subject.trim() || !manualTicketForm.message.trim()) {
-      alert('Please fill in all required fields (Customer Name, Subject, Message)');
+      showWarning('Missing Fields', 'Please fill in all required fields (Customer Name, Subject, Message)');
       return;
     }
-
+    setCreatingTicket(true);
     try {
       const ticketId = await ticketsService.getNextTicketNumber();
       
@@ -472,6 +500,9 @@ export default function WhatsAppHelpDesk() {
       setSelectedTicket(transformedTicket);
       setShowManualTicketForm(false);
 
+      // Show success notification
+      showSuccess('Ticket Created', 'The ticket was added successfully.');
+
       // Reset form
       setManualTicketForm({
         customerName: '',
@@ -488,7 +519,9 @@ export default function WhatsAppHelpDesk() {
       });
     } catch (err) {
       const error = err as DatabaseError;
-      alert('Error creating ticket: ' + error.message);
+      showError('Ticket Creation Failed', error.message);
+    } finally {
+      setCreatingTicket(false);
     }
   };
 
@@ -578,7 +611,7 @@ export default function WhatsAppHelpDesk() {
       };
     } catch (err) {
       const error = err as DatabaseError;
-      console.error('Error creating ticket from WhatsApp:', error);
+      showError('WhatsApp Ticket Creation Failed', error.message);
       throw error;
     }
   };
@@ -610,7 +643,7 @@ export default function WhatsAppHelpDesk() {
       }, 500);
     } catch (err) {
       const error = err as DatabaseError;
-      alert('Error creating ticket from WhatsApp: ' + error.message);
+      showError('WhatsApp Ticket Creation Failed', error.message);
     }
   };
 
@@ -646,7 +679,7 @@ export default function WhatsAppHelpDesk() {
       await loadMessages();
     } catch (err) {
       const error = err as DatabaseError;
-      alert('Error sending reply: ' + error.message);
+      showError('Reply Failed', error.message);
     }
   };
 
@@ -692,7 +725,7 @@ export default function WhatsAppHelpDesk() {
       await loadMessages();
     } catch (err) {
       const error = err as DatabaseError;
-      alert('Error updating ticket status: ' + error.message);
+      showError('Status Update Failed', error.message);
     }
   };
 
@@ -729,7 +762,7 @@ export default function WhatsAppHelpDesk() {
       await loadAgents();
     } catch (err) {
       const error = err as DatabaseError;
-      alert('Error reassigning ticket: ' + error.message);
+      showError('Reassignment Failed', error.message);
     }
   };
 
@@ -739,7 +772,46 @@ export default function WhatsAppHelpDesk() {
       await loadAgents();
     } catch (err) {
       const error = err as DatabaseError;
-      alert('Error updating agent: ' + error.message);
+      showError('Agent Update Failed', error.message);
+    }
+  };
+
+  // Add Agent logic
+  const handleAddAgent = async () => {
+    if (!addAgentForm.name.trim() || !addAgentForm.email.trim()) {
+      showWarning('Missing Fields', 'Please fill in all required fields (Name, Email)');
+      return;
+    }
+    setAddingAgent(true);
+    try {
+      const newAgent = {
+        name: addAgentForm.name.trim(),
+        email: addAgentForm.email.trim(),
+        role: addAgentForm.role,
+        expertise: addAgentForm.expertise.split(',').map(e => e.trim()).filter(Boolean),
+        whatsapp_numbers: addAgentForm.whatsappNumbers.split(',').map(n => n.trim()).filter(Boolean),
+        max_tickets: Number(addAgentForm.maxTickets) || 10,
+        is_active: !!addAgentForm.isActive,
+        current_load: 0
+      };
+      await agentsService.create(newAgent);
+      showSuccess('Agent Added', 'The agent was added successfully.');
+      setShowAddAgentForm(false);
+      setAddAgentForm({
+        name: '',
+        email: '',
+        role: 'agent',
+        expertise: '',
+        whatsappNumbers: '',
+        maxTickets: 10,
+        isActive: true
+      });
+      await loadAgents();
+    } catch (err) {
+      const error = err as DatabaseError;
+      showError('Add Agent Failed', error.message);
+    } finally {
+      setAddingAgent(false);
     }
   };
 
@@ -811,9 +883,115 @@ export default function WhatsAppHelpDesk() {
           <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
           <p className="text-gray-600 text-sm">Loading WhatsApp Help Desk...</p>
         </div>
-      </div>
-    );
-  }
+      {/* Add Agent Modal */}
+      {showAddAgentForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-black">Add New Agent</h2>
+              <button
+                onClick={() => setShowAddAgentForm(false)}
+                className="p-1 text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-3 mb-4">
+              <div>
+                <label className="block text-xs font-medium text-black mb-1">Name *</label>
+                <input
+                  type="text"
+                  value={addAgentForm.name}
+                  onChange={e => setAddAgentForm(f => ({ ...f, name: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 text-black"
+                  placeholder="Agent name"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-black mb-1">Email *</label>
+                <input
+                  type="email"
+                  value={addAgentForm.email}
+                  onChange={e => setAddAgentForm(f => ({ ...f, email: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 text-black"
+                  placeholder="agent@example.com"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-black mb-1">Role</label>
+                <select
+                  value={addAgentForm.role}
+                  onChange={e => setAddAgentForm(f => ({ ...f, role: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 text-black"
+                >
+                  <option value="agent">Agent</option>
+                  <option value="admin">Admin</option>
+                  <option value="supervisor">Supervisor</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-black mb-1">Expertise (comma separated)</label>
+                <input
+                  type="text"
+                  value={addAgentForm.expertise}
+                  onChange={e => setAddAgentForm(f => ({ ...f, expertise: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 text-black"
+                  placeholder="support, billing, technical"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-black mb-1">WhatsApp Numbers (comma separated)</label>
+                <input
+                  type="text"
+                  value={addAgentForm.whatsappNumbers}
+                  onChange={e => setAddAgentForm(f => ({ ...f, whatsappNumbers: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 text-black"
+                  placeholder="+94771234567, +94770000000"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-black mb-1">Max Tickets</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={addAgentForm.maxTickets}
+                  onChange={e => setAddAgentForm(f => ({ ...f, maxTickets: parseInt(e.target.value, 10) || 10 }))}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 text-black"
+                />
+              </div>
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={addAgentForm.isActive}
+                  onChange={e => setAddAgentForm(f => ({ ...f, isActive: e.target.checked }))}
+                  className="mr-2"
+                  id="isActiveAgent"
+                />
+                <label htmlFor="isActiveAgent" className="text-xs text-black">Active</label>
+              </div>
+            </div>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowAddAgentForm(false)}
+                className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddAgent}
+                disabled={addingAgent || !addAgentForm.name.trim() || !addAgentForm.email.trim()}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center space-x-1"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>{addingAgent ? 'Adding...' : 'Add Agent'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
   // Show error state
   if (error) {
@@ -841,8 +1019,18 @@ export default function WhatsAppHelpDesk() {
   const activeAgents = agents.filter(a => a.is_active).length;
 
   return (
-    <div className="h-screen bg-gray-50 text-sm flex flex-col" style={{ color: '#f1f1f1', fontFamily: 'Arial, sans-serif' }}>
-      <div className="flex flex-1 overflow-hidden">
+    <>
+      <Notification
+        show={notification.show}
+        type={notification.type}
+        title={notification.title}
+        message={notification.message}
+        duration={notification.duration}
+        onClose={hideNotification}
+        position={notification.position}
+      />
+      <div className="h-screen bg-gray-50 text-sm flex flex-col" style={{ color: '#f1f1f1', fontFamily: 'Arial, sans-serif' }}>
+        <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
         <div className="w-64 bg-white shadow-sm border-r">
           <div className="p-4 border-b">
@@ -1357,7 +1545,7 @@ export default function WhatsAppHelpDesk() {
                               onClick={() => {
                                 if (replyMessage.trim()) {
                                   // Add internal note logic here
-                                  alert('Note added to ticket (this would be saved in the database)');
+                                  showSuccess('Note Added', 'Note added to ticket (this would be saved in the database)');
                                   setReplyMessage('');
                                 }
                               }}
@@ -1399,7 +1587,7 @@ export default function WhatsAppHelpDesk() {
                   <h2 className="text-lg font-semibold text-black">Agents & WhatsApp Numbers</h2>
                   <div className="flex space-x-2">
                     <button
-                      onClick={() => alert('Add Agent feature - integrate with createAgent function!')}
+                      onClick={() => setShowAddAgentForm(true)}
                       className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 flex items-center space-x-1"
                     >
                       <UserPlus className="w-3 h-3" />
@@ -1793,12 +1981,12 @@ export default function WhatsAppHelpDesk() {
                   Cancel
                 </button>
                 <button
-                  onClick={createManualTicket}
-                  disabled={!manualTicketForm.customerName.trim() || !manualTicketForm.subject.trim() || !manualTicketForm.message.trim()}
-                  className="px-4 py-2 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center space-x-1"
+                onClick={createManualTicket}
+                disabled={creatingTicket || !manualTicketForm.customerName.trim() || !manualTicketForm.subject.trim() || !manualTicketForm.message.trim()}
+                className="px-4 py-2 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center space-x-1"
                 >
-                  <Save className="w-4 h-4" />
-                  <span>Create Ticket</span>
+                <Save className="w-4 h-4" />
+                <span>{creatingTicket ? 'Creating...' : 'Create Ticket'}</span>
                 </button>
               </div>
             </div>
@@ -1958,5 +2146,6 @@ export default function WhatsAppHelpDesk() {
 
       </div>
     </div>
+    </>
   );
 }
