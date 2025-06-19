@@ -87,7 +87,6 @@ interface Ticket {
   priority: string;
   category: string;
   assigned_to: string;
-  assigned_agent_id?: string | null;
   created_at: string;
   updated_at: string;
   tags: string[];
@@ -738,7 +737,7 @@ export default function WhatsAppHelpDesk() {
       if (!newAgent) return;
 
       const oldTicket = tickets.find(t => t.id === ticketId);
-      const oldAgent = agents.find(a => a.id === oldTicket?.assigned_agent_id);
+      const oldAgent = agents.find(a => a.id === oldTicket?.assigned_to);
 
       // Update ticket
       await ticketsService.update(ticketId, {
@@ -824,7 +823,7 @@ export default function WhatsAppHelpDesk() {
                          ticket.customer_name.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === 'all' || ticket.status === filterStatus;
     const matchesCategory = filterCategory === 'all' || ticket.category === filterCategory;
-    const matchesAgent = filterAgent === 'all' || ticket.assigned_agent_id === filterAgent;
+    const matchesAgent = filterAgent === 'all' || ticket.assigned_to === filterAgent;
     
     return matchesSearch && matchesStatus && matchesCategory && matchesAgent;
   });
@@ -1182,7 +1181,7 @@ export default function WhatsAppHelpDesk() {
                         
                         <div className="flex items-center space-x-2">
                           <select
-                            value={selectedTicket.assigned_agent_id || ''}
+                            value={selectedTicket.assigned_to || ''}
                             onChange={(e) => e.target.value && reassignTicket(selectedTicket.id, e.target.value)}
                             className="px-2 py-1 text-xs border border-gray-300 rounded text-black"
                           >
@@ -1240,14 +1239,14 @@ export default function WhatsAppHelpDesk() {
                         <div className="flex items-center justify-between">
                           <div className="flex items-center space-x-2">
                             <span className="font-medium text-black">Assigned Agent:</span>
-                            {selectedTicket.assigned_agent_id ? (
+                            {selectedTicket.assigned_to ? (
                               <div className="flex items-center space-x-1">
                                 <div className="w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center text-white text-xs">
                                   {selectedTicket.assigned_to?.charAt(0)}
                                 </div>
                                 <span className="text-black">{selectedTicket.assigned_to}</span>
                                 <span className="text-gray-600">
-                                  ({agents.find(a => a.id === selectedTicket.assigned_agent_id)?.current_load || 0}/{agents.find(a => a.id === selectedTicket.assigned_agent_id)?.max_tickets || 0} tickets)
+                                  ({agents.find(a => a.id === selectedTicket.assigned_to)?.current_load || 0}/{agents.find(a => a.id === selectedTicket.assigned_to)?.max_tickets || 0} tickets)
                                 </span>
                               </div>
                             ) : (
