@@ -1,3 +1,4 @@
+// components/Notification.jsx
 import React, { useEffect } from 'react';
 import PropTypes from 'prop-types';
 import { CheckCircle, AlertCircle, X, Info } from 'lucide-react';
@@ -9,13 +10,14 @@ const Notification = ({
   message,
   duration = 5000,
   onClose,
-  position = 'top-center'
+  position = 'top-right'
 }) => {
   useEffect(() => {
     if (show && duration > 0) {
       const timer = setTimeout(() => {
         onClose();
       }, duration);
+
       return () => clearTimeout(timer);
     }
   }, [show, duration, onClose]);
@@ -53,30 +55,46 @@ const Notification = ({
   };
 
   const getPositionStyle = () => {
-    // Always use top-center for best visibility
-    return 'top-6 left-1/2 transform -translate-x-1/2 w-full max-w-md sm:max-w-lg px-2';
+    switch (position) {
+      case 'top-right':
+        return 'top-4 right-4';
+      case 'top-left':
+        return 'top-4 left-4';
+      case 'bottom-right':
+        return 'bottom-4 right-4';
+      case 'bottom-left':
+        return 'bottom-4 left-4';
+      case 'top-center':
+        return 'top-4 left-1/2 transform -translate-x-1/2';
+      default:
+        return 'top-4 right-4';
+    }
   };
 
   return (
-    <div className={`fixed z-[100] ${getPositionStyle()} pointer-events-none`} style={{marginTop: 0}}>
-      <div className={`rounded-xl border p-5 shadow-2xl transition-all duration-300 ease-in-out flex items-start bg-white/95 backdrop-blur-md ${getNotificationStyle()} pointer-events-auto`} style={{fontSize: '1.1rem', minWidth: '260px'}}>
-        <div className="flex-shrink-0 mt-1">
-          {getIcon()}
-        </div>
-        <div className="ml-4 flex-1">
-          <p className="font-semibold text-base mb-1">{title}</p>
-          <p className="text-base opacity-95 break-words">{message}</p>
-        </div>
-        <div className="ml-4 flex flex-shrink-0">
-          <button
-            className="inline-flex rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 hover:opacity-75 transition-opacity"
-            onClick={onClose}
-            aria-label="Close notification"
-            tabIndex={0}
-            style={{fontSize: '1.2rem'}}
-          >
-            <X className="h-5 w-5 opacity-60 hover:opacity-100" />
-          </button>
+    <div className={`fixed z-[60] max-w-sm ${getPositionStyle()}`}>
+      <div className={`rounded-lg border p-4 shadow-lg transition-all duration-300 ease-in-out ${getNotificationStyle()}`}>
+        <div className="flex items-start">
+          <div className="flex-shrink-0">
+            {getIcon()}
+          </div>
+          <div className="ml-3 w-0 flex-1">
+            <p className="text-sm font-medium">
+              {title}
+            </p>
+            <p className="mt-1 text-sm opacity-90">
+              {message}
+            </p>
+          </div>
+          <div className="ml-4 flex flex-shrink-0">
+            <button
+              className="inline-flex rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 hover:opacity-75 transition-opacity"
+              onClick={onClose}
+              aria-label="Close notification"
+            >
+              <X className="h-4 w-4 opacity-60 hover:opacity-100" />
+            </button>
+          </div>
         </div>
       </div>
     </div>

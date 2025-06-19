@@ -1,3 +1,4 @@
+// hooks/useNotification.js
 import { useState, useCallback } from 'react';
 
 export const useNotification = () => {
