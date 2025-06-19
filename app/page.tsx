@@ -1488,7 +1488,7 @@ export default function WhatsAppHelpDesk() {
             <div className="flex-1">
               <div className="p-4 border-b bg-white">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-lg font-semibold text-black">Agents & WhatsApp Numbers</h2>
+                  <h2 className="text-lg font-semibold text-black">Agents</h2>
                   <div className="flex space-x-2">
                     <button
                       onClick={() => setShowAddAgentForm(true)}
@@ -1497,13 +1497,7 @@ export default function WhatsAppHelpDesk() {
                       <UserPlus className="w-3 h-3" />
                       <span>Add Agent</span>
                     </button>
-                    <button
-                      onClick={() => alert('Add WhatsApp Number feature coming soon!')}
-                      className="px-3 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 flex items-center space-x-1"
-                    >
-                      <Phone className="w-3 h-3" />
-                      <span>Add Number</span>
-                    </button>
+             
                   </div>
                 </div>
               </div>
@@ -1607,75 +1601,6 @@ export default function WhatsAppHelpDesk() {
                   </div>
                 </div>
 
-                {/* WhatsApp Numbers Section */}
-                <div>
-                  <h3 className="text-sm font-semibold text-black mb-3">WhatsApp Numbers ({whatsappNumbers.length})</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {whatsappNumbers.map((number) => (
-                      <div key={number.id} className={`p-4 border rounded-lg ${number.is_active ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center space-x-2">
-                            <MessageCircle className="w-6 h-6 text-green-500" />
-                            <div>
-                              <h4 className="font-medium text-sm text-black">{number.display_name}</h4>
-                              <span className="text-xs font-mono text-gray-700">{number.number}</span>
-                            </div>
-                          </div>
-                          <div className="flex items-center space-x-1">
-                            <div className={`w-2 h-2 rounded-full ${number.is_active ? 'bg-green-500' : 'bg-gray-400'}`}></div>
-                            <span className="text-xs text-black">{number.is_active ? 'Active' : 'Inactive'}</span>
-                          </div>
-                        </div>
-
-                        <div className="space-y-2 text-xs">
-                          <div>
-                            <span className="text-gray-700">Assigned Agent:</span>
-                            <span className="ml-1 font-medium text-black">
-                              {number.assigned_agent_id 
-                                ? agents.find(a => a.id === number.assigned_agent_id)?.name || 'Unknown'
-                                : 'Unassigned'
-                              }
-                            </span>
-                          </div>
-
-                          <div>
-                            <span className="text-gray-700">Categories:</span>
-                            <div className="mt-1 flex flex-wrap gap-1">
-                              {number.categories && number.categories.map(category => (
-                                <span key={category} className="px-1.5 py-0.5 bg-green-100 text-green-800 text-xs rounded capitalize">
-                                  {category}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div>
-                            <span className="text-gray-700">Business Hours:</span>
-                            <span className="ml-1 text-black">{number.business_hours}</span>
-                          </div>
-
-                          <div className="flex items-center space-x-1">
-                            <span className="text-gray-700">Auto-Reply:</span>
-                            <span className={`px-1.5 py-0.5 rounded text-xs ${
-                              number.auto_reply_enabled 
-                                ? 'bg-green-100 text-green-800' 
-                                : 'bg-gray-100 text-gray-800'
-                            }`}>
-                              {number.auto_reply_enabled ? 'Enabled' : 'Disabled'}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="mt-3 flex space-x-1">
-                          <button className="px-2 py-1 bg-gray-100 text-black text-xs rounded hover:bg-gray-200 flex items-center space-x-1">
-                            <Edit className="w-3 h-3" />
-                            <span>Edit</span>
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
               </div>
             </div>
           )}
