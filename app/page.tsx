@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Notification from './components/Notification';
 import AddAgentModal from './components/AddAgentModal';
 import { useNotification } from '../hooks/useNotification';
+import { useWhatsApp } from '../hooks/useWhatsApp';
 
 import { 
   MessageSquare, 
@@ -161,6 +162,7 @@ export default function WhatsAppHelpDesk() {
   // Notification system
   const {
     notification,
+    
     showNotification,
     hideNotification,
     showSuccess,
@@ -931,8 +933,7 @@ export default function WhatsAppHelpDesk() {
         message={notification.message}
         duration={notification.duration}
         onClose={hideNotification}
-        position={notification.position}
-      />
+        position={notification.position} ticketId={undefined} priority={undefined} assignee={undefined} timestamp={undefined}      />
       <div className="h-screen bg-gray-50 text-sm flex flex-col" style={{ color: '#f1f1f1', fontFamily: 'Arial, sans-serif' }}>
         <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
