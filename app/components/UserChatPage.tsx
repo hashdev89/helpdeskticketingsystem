@@ -41,7 +41,7 @@ export default function UserChatPage() {
   const [isConnected, setIsConnected] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [userName, setUserName] = useState('');
-  const [userEmail, setUserEmail] = useState('');
+  const [userPhone, setUserPhone] = useState('');
   const [chatStarted, setChatStarted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [debugInfo, setDebugInfo] = useState('');
@@ -129,8 +129,8 @@ export default function UserChatPage() {
       const sessionData = {
         session_id: newSessionId,
         customer_name: customerName,
-        customer_email: userEmail.trim() || null,
-        customer_phone: null,
+        customer_email: null,
+        customer_phone: userPhone.trim() || null,
         is_anonymous: !userName.trim(),
         channel: 'web-chat',
         status: 'active'
@@ -190,7 +190,7 @@ export default function UserChatPage() {
 
       // Create ticket automatically
       try {
-        const ticketInfo = await createTicketFromChat(newSessionId, customerName, newMessage.trim());
+        const ticketInfo = await createTicketFromChat(newSessionId, customerName, newMessage.trim(), userPhone.trim());
         setDebugInfo('Ticket created successfully!');
         setTicketStatus(ticketInfo);
       } catch (ticketError) {
@@ -264,7 +264,7 @@ export default function UserChatPage() {
   };
 
   // Create ticket from chat with better error handling
-  const createTicketFromChat = async (sessionId: string, customerName: string, firstMessage: string): Promise<TicketStatus> => {
+  const createTicketFromChat = async (sessionId: string, customerName: string, firstMessage: string, customerPhone: string): Promise<TicketStatus> => {
     try {
       setDebugInfo('Getting next ticket number...');
 
@@ -321,8 +321,8 @@ export default function UserChatPage() {
         id: ticketId,
         session_id: sessionId,
         customer_name: customerName,
-        customer_phone: 'Not provided',
-        customer_email: userEmail.trim() || null,
+        customer_phone: customerPhone || 'Not provided',
+        customer_email: null,
         subject: `Live Chat: ${firstMessage.substring(0, 50)}${firstMessage.length > 50 ? '...' : ''}`,
         message: firstMessage,
         status: 'open',
@@ -812,22 +812,22 @@ export default function UserChatPage() {
                     type="text"
                     value={userName}
                     onChange={(e) => setUserName(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
                     placeholder="Your name"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Email (Optional)
-                  </label>
-                  <input
-                    type="email"
-                    value={userEmail}
-                    onChange={(e) => setUserEmail(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="your@email.com"
-                  />
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                Phone Number (Optional)
+                </label>
+                <input
+                type="tel"
+                value={userPhone}
+                onChange={(e) => setUserPhone(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
+                placeholder="e.g. +1234567890"
+                />
                 </div>
 
                 <div>
@@ -838,7 +838,7 @@ export default function UserChatPage() {
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
                     onKeyPress={handleKeyPress}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
                     rows={3}
                     placeholder="Describe your issue or question..."
                     required
@@ -955,7 +955,7 @@ export default function UserChatPage() {
                   onChange={(e) => handleTyping(e.target.value)}
                   onKeyPress={handleKeyPress}
                   placeholder={chatClosed ? "Chat is closed" : "Type your message..."}
-                  className={`flex-1 px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none ${
+                  className={`flex-1 px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black resize-none ${
                     chatClosed ? 'bg-gray-100 cursor-not-allowed' : ''
                   }`}
                   rows={1}
