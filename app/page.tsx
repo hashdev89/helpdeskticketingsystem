@@ -79,6 +79,7 @@ interface StatusHistoryItem {
 }
 
 interface Ticket {
+  session_id: string;
   id: string;
   customer_name: string;
   customer_phone: string;
@@ -125,6 +126,7 @@ interface StatusHistoryData {
 }
 
 interface TicketData {
+  session_id: string;
   id: string;
   customer_name: string;
   customer_phone: string;
@@ -185,8 +187,7 @@ export default function WhatsAppHelpDesk() {
   const [error, setError] = useState<string | null>(null);
 
   // Load web chat messages for a ticket
-  // Memoized to avoid useEffect dependency issues
-  const loadWebChatMessages = useCallback(async (ticket) => {
+  const loadWebChatMessages = useCallback(async (ticket: { channel: string; id: any; }) => {
     if (!ticket || ticket.channel !== 'web') {
       setWebChatMessages([]);
       return;
@@ -283,6 +284,7 @@ export default function WhatsAppHelpDesk() {
       // Transform the data to match the component's expected format
       const transformedTickets: Ticket[] = data.map(ticket => ({
         ...ticket,
+        session_id: ticket.session_id || ticket.id, // Ensure session_id is present; fallback to id if missing
         customer_email: ticket.customer_email || undefined,
         whatsapp_number: ticket.whatsapp_number || undefined,
         assigned_to: ticket.assigned_agent?.name || 'Unassigned',
@@ -363,29 +365,8 @@ export default function WhatsAppHelpDesk() {
 
   // Set up real-time subscriptions
   useEffect(() => {
-    const ticketSubscription = subscriptions.subscribeToTickets((event) => {
-      loadTickets().then(() => {
-        // If a new ticket was inserted, auto-select it if it's open and unassigned (or matches other criteria)
-        if (event && event.type === 'INSERT' && event.new) {
-          const newTicket = event.new;
-          // Only auto-select if it's a web chat ticket and open
-          if (newTicket.channel === 'web' && newTicket.status === 'open') {
-            setSelectedTicket({
-              ...newTicket,
-              assigned_to: newTicket.assigned_agent?.name || 'Unassigned',
-              statusHistory: newTicket.status_history?.map((sh) => ({
-                status: sh.status,
-                timestamp: sh.created_at,
-                updated_by: sh.updated_by,
-                note: sh.note
-              })) || []
-            });
-            // Load messages for the new ticket
-            loadWebChatMessages(newTicket);
-            showInfo('New Chat', `A new user chat has started: ${newTicket.subject}`);
-          }
-        }
-      });
+    const ticketSubscription = subscriptions.subscribeToTickets(() => {
+      loadTickets();
     });
 
     const messageSubscription = subscriptions.subscribeToMessages((payload: MessagePayload) => {
@@ -442,7 +423,7 @@ export default function WhatsAppHelpDesk() {
     }
   }, [tickets, selectedTicket, loadWebChatMessages]);
 
-  // Real-time subscription for web chat messages + polling
+  // Real-time subscription for web chat messages + polling every 1 second
   useEffect(() => {
     if (!selectedTicket || selectedTicket.channel !== 'web') return;
     const channel = supabase
@@ -461,15 +442,23 @@ export default function WhatsAppHelpDesk() {
         }
       )
       .subscribe();
-    // Polling every 5 seconds for latest messages
+    // Polling every 1 second for latest messages
     const interval = setInterval(() => {
       loadWebChatMessages(selectedTicket);
-    }, 5000);
+    }, 1000);
     return () => {
       supabase.removeChannel(channel);
       clearInterval(interval);
     };
   }, [selectedTicket, loadWebChatMessages]);
+
+  // Poll ticket list every 1 second for reliability
+  useEffect(() => {
+    const ticketInterval = setInterval(() => {
+      loadTickets();
+    }, 1000);
+    return () => clearInterval(ticketInterval);
+  }, [loadTickets]);
 
   // Helper function to get agent for assignment
   const getAgentForAssignment = (category: string, whatsappNumber?: string): Agent | undefined => {
@@ -1272,21 +1261,7 @@ export default function WhatsAppHelpDesk() {
                               </option>
                             ))}
                           </select>
-                          <select
-                            value={selectedTicket.priority}
-                            onChange={async (e) => {
-                              const newPriority = e.target.value;
-                              await ticketsService.update(selectedTicket.id, { priority: newPriority });
-                              await loadTickets();
-                              showSuccess('Priority Updated', `Priority set to ${newPriority}`);
-                            }}
-                            className="px-2 py-1 text-xs border border-yellow-400 rounded text-black"
-                          >
-                            <option value="low">Low</option>
-                            <option value="medium">Medium</option>
-                            <option value="high">High</option>
-                            <option value="urgent">Urgent</option>
-                          </select>
+                          
                           <select
                             value={selectedTicket.status}
                             onChange={(e) => updateTicketStatus(selectedTicket.id, e.target.value)}
@@ -1322,9 +1297,21 @@ export default function WhatsAppHelpDesk() {
                         <div className="flex items-center space-x-1">
                           <AlertCircle className="w-3 h-3 text-gray-400" />
                           <span className="text-gray-700">Priority:</span>
-                          <span className={`px-1.5 py-0.5 rounded-full text-xs font-medium ${getPriorityColor(selectedTicket.priority)}`}>
-                            {selectedTicket.priority}
-                          </span>
+                          <select
+                            value={selectedTicket.priority}
+                            onChange={async (e) => {
+                              const newPriority = e.target.value;
+                              await ticketsService.update(selectedTicket.id, { priority: newPriority });
+                              await loadTickets();
+                              showSuccess('Priority Updated', `Priority set to ${newPriority}`);
+                            }}
+                            className={`px-1.5 py-0.5 rounded-full text-xs font-medium ${getPriorityColor(selectedTicket.priority)} border border-yellow-400 text-black ml-1`}
+                          >
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                            <option value="urgent">Urgent</option>
+                          </select>
                         </div>
                       </div>
 
@@ -1650,7 +1637,7 @@ export default function WhatsAppHelpDesk() {
                                     // Optionally reload messages
                                     await loadWebChatMessages(selectedTicket);
                                   } catch (err) {
-                                    showError('Reply Failed', err?.message || 'Failed to send reply');
+                                    showError('Reply Failed', (err as Error)?.message || 'Failed to send reply');
                                   }
                                 } else {
                                   // Add internal note logic here
