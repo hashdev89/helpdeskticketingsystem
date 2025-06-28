@@ -62,6 +62,8 @@ export default function UserChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  
+
   // Test database connection
   const testConnection = async () => {
     try {
@@ -432,6 +434,74 @@ export default function UserChatPage() {
     }
   };
 
+  // Handle image upload and send as chat message
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!event.target.files || !sessionId || chatClosed) return;
+    const file = event.target.files[0];
+    if (!file) return;
+
+    // Show temp message
+    const tempId = `img_temp_${Date.now()}`;
+    setMessages(prev => [...prev, {
+      id: tempId,
+      message_text: 'Uploading image...',
+      sender_type: 'user',
+      sender_name: userName || 'You',
+      created_at: new Date().toISOString(),
+      metadata: { uploading: true }
+    }]);
+
+    try {
+      // Upload to Supabase Storage (bucket: 'chat-images')
+      const fileExt = file.name.split('.').pop();
+      const filePath = `chat/${sessionId}/${Date.now()}.${fileExt}`;
+      let { error: uploadError } = await supabase.storage.from('chat-images').upload(filePath, file);
+      if (uploadError) {
+        console.error('Supabase upload error:', uploadError);
+        throw uploadError;
+      }
+
+      // Get public URL
+      const { data: publicUrlData } = supabase.storage.from('chat-images').getPublicUrl(filePath);
+      const imageUrl = publicUrlData?.publicUrl;
+      if (!imageUrl) throw new Error('Failed to get image URL');
+
+      // Save image message to database
+      const { data, error } = await supabase
+        .from('chat_messages')
+        .insert([{
+          session_id: sessionId,
+          ticket_id: ticketStatus?.ticket_id || null,
+          message_text: imageUrl,
+          message_type: 'image',
+          sender_type: 'user',
+          sender_name: userName || 'User',
+          is_read: false,
+          metadata: { file_name: file.name, file_type: file.type }
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Replace temp message with real image message
+      setMessages(prev => prev.filter(msg => msg.id !== tempId));
+      setMessages(prev => [...prev, {
+        id: data.id,
+        message_text: imageUrl,
+        sender_type: 'user',
+        sender_name: userName || 'You',
+        created_at: data.created_at,
+        metadata: { file_name: file.name, file_type: file.type }
+      }]);
+    } catch (err) {
+      setMessages(prev => prev.filter(msg => msg.id !== tempId));
+      alert('Failed to upload image.');
+      // Print the error object and its stringified version for debugging
+      console.error('Image upload error:', err, JSON.stringify(err));
+    }
+  };
+
   // Send message with better error handling
   const sendMessage = async () => {
     if (!newMessage.trim() || !sessionId || chatClosed) return;
@@ -476,12 +546,19 @@ export default function UserChatPage() {
         throw error;
       }
 
-      // Update the temp message with real ID
-      setMessages(prev => prev.map(msg => 
-        msg.id === tempMessage.id 
-          ? { ...msg, id: data.id }
-          : msg
-      ));
+      // Update the temp message with real ID, or if a message with the real ID already exists, remove the temp message
+      setMessages(prev => {
+        // If a message with the real ID already exists, remove the temp message
+        if (prev.some(msg => msg.id === data.id)) {
+          return prev.filter(msg => msg.id !== tempMessage.id);
+        }
+        // Otherwise, replace temp with real
+        return prev.map(msg =>
+          msg.id === tempMessage.id
+            ? { ...msg, id: data.id }
+            : msg
+        );
+      });
 
       // Update session activity
       await supabase
@@ -517,14 +594,18 @@ export default function UserChatPage() {
           
           // Filter here in JS instead of the Supabase filter param
           if (newMessage.session_id === sessionId && newMessage.sender_type !== 'user') {
-            setMessages(prev => [...prev, {
-              id: newMessage.id,
-              message_text: newMessage.message_text,
-              sender_type: newMessage.sender_type,
-              sender_name: newMessage.sender_name,
-              created_at: newMessage.created_at,
-              metadata: newMessage.metadata
-            }]);
+            setMessages(prev => {
+              // Remove any message with the same id before adding
+              const filtered = prev.filter(msg => msg.id !== newMessage.id);
+              return [...filtered, {
+                id: newMessage.id,
+                message_text: newMessage.message_text,
+                sender_type: newMessage.sender_type,
+                sender_name: newMessage.sender_name,
+                created_at: newMessage.created_at,
+                metadata: newMessage.metadata
+              }];
+            });
 
             if (newMessage.metadata?.ticket_status) {
               setTicketStatus(prev => prev ? {
@@ -569,17 +650,21 @@ export default function UserChatPage() {
             if (updatedTicket.status === 'closed') {
               setChatClosed(true);
               setIsConnected(false);
-              
-              // Add system message about chat closure
-              const closureMessage: ChatMessage = {
-                id: `closure_${Date.now()}`,
-                message_text: 'This chat has been closed. Thank you for contacting support!',
-                sender_type: 'system',
-                sender_name: 'Support Bot',
-                created_at: new Date().toISOString()
-              };
-              
-              setMessages(prev => [...prev, closureMessage]);
+              // Only add closure message if not already present
+              setMessages(prev => {
+                if (prev.some(m => m.sender_type === 'system' && m.message_text.includes('This chat has been closed'))) {
+                  return prev;
+                }
+                const closureMessage: ChatMessage = {
+                  id: `closure_${Date.now()}`,
+                  message_text: 'This chat has been closed. Thank you for contacting support!',
+                  sender_type: 'system',
+                  sender_name: 'Support Bot',
+                  created_at: new Date().toISOString()
+                };
+                return [...prev, closureMessage];
+              });
+              // DO NOT reset chatStarted, sessionId, or messages
             }
           }
         }
@@ -790,7 +875,8 @@ export default function UserChatPage() {
             {/* Messages */}
             <div className="flex-1 p-4 overflow-y-auto bg-gray-50">
               <div className="space-y-4">
-                {messages.map((message) => (
+                {/* Deduplicate messages by id before rendering to avoid duplicate key errors */}
+                {Array.from(new Map(messages.map(m => [m.id, m])).values()).map((message) => (
                   <div
                     key={message.id}
                     className={`flex ${message.sender_type === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -814,7 +900,17 @@ export default function UserChatPage() {
                           </span>
                         </div>
                       )}
-                      <p className="text-sm">{message.message_text}</p>
+                      {/* Render image if message_type is image or message_text is an image URL */}
+                      {message.message_text === 'image' || (typeof message.message_text === 'string' && message.message_text.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)$/i)) ? (
+                        <img
+                          src={message.message_text}
+                          alt="chat-img"
+                          className="max-w-[200px] max-h-[200px] rounded mb-1 border"
+                          style={{ objectFit: 'cover' }}
+                        />
+                      ) : (
+                        <p className="text-sm">{message.message_text}</p>
+                      )}
                       <div className={`text-xs mt-1 ${
                         message.sender_type === 'user' ? 'text-blue-200' : 'text-gray-500'
                       }`}>
@@ -866,6 +962,20 @@ export default function UserChatPage() {
                   style={{ minHeight: '40px', maxHeight: '100px' }}
                   disabled={chatClosed}
                 />
+                {/* Image upload button */}
+                <label className={`cursor-pointer ${chatClosed ? 'opacity-50 pointer-events-none' : ''}`}
+                  title="Upload screenshot/image">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    style={{ display: 'none' }}
+                    onChange={handleImageUpload}
+                    disabled={chatClosed}
+                  />
+                  <span className="inline-block px-2 py-2 bg-gray-200 rounded hover:bg-gray-300">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 16.5V19a2 2 0 002 2h14a2 2 0 002-2v-2.5M16 3.13a4 4 0 010 7.75M8 7a4 4 0 100-8 4 4 0 000 8zm0 0v8m0 0l-4-4m4 4l4-4" /></svg>
+                  </span>
+                </label>
                 <button
                   onClick={sendMessage}
                   disabled={!newMessage.trim() || chatClosed}

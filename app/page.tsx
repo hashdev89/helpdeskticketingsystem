@@ -45,6 +45,7 @@ import {
   whatsappMessagesService,
   subscriptions 
 } from '../lib/supabase.js';
+import { supabase } from '../lib/supabase';
 
 // Type definitions
 interface WhatsAppNumber {
@@ -179,8 +180,30 @@ export default function WhatsAppHelpDesk() {
   const [whatsappNumbers, setWhatsappNumbers] = useState<WhatsAppNumber[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [whatsappMessages, setWhatsappMessages] = useState<WhatsAppMessage[]>([]);
+  const [webChatMessages, setWebChatMessages] = useState<any[]>([]); // For web chat messages
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Load web chat messages for a ticket
+  // Memoized to avoid useEffect dependency issues
+  const loadWebChatMessages = useCallback(async (ticket) => {
+    if (!ticket || ticket.channel !== 'web') {
+      setWebChatMessages([]);
+      return;
+    }
+    try {
+      const { data, error } = await supabase
+        .from('chat_messages')
+        .select('*')
+        .eq('ticket_id', ticket.id)
+        .order('created_at', { ascending: true });
+      if (!error) {
+        setWebChatMessages(data || []);
+      }
+    } catch (err) {
+      setWebChatMessages([]);
+    }
+  }, []);
 
   // UI state management
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
@@ -340,8 +363,29 @@ export default function WhatsAppHelpDesk() {
 
   // Set up real-time subscriptions
   useEffect(() => {
-    const ticketSubscription = subscriptions.subscribeToTickets(() => {
-      loadTickets();
+    const ticketSubscription = subscriptions.subscribeToTickets((event) => {
+      loadTickets().then(() => {
+        // If a new ticket was inserted, auto-select it if it's open and unassigned (or matches other criteria)
+        if (event && event.type === 'INSERT' && event.new) {
+          const newTicket = event.new;
+          // Only auto-select if it's a web chat ticket and open
+          if (newTicket.channel === 'web' && newTicket.status === 'open') {
+            setSelectedTicket({
+              ...newTicket,
+              assigned_to: newTicket.assigned_agent?.name || 'Unassigned',
+              statusHistory: newTicket.status_history?.map((sh) => ({
+                status: sh.status,
+                timestamp: sh.created_at,
+                updated_by: sh.updated_by,
+                note: sh.note
+              })) || []
+            });
+            // Load messages for the new ticket
+            loadWebChatMessages(newTicket);
+            showInfo('New Chat', `A new user chat has started: ${newTicket.subject}`);
+          }
+        }
+      });
     });
 
     const messageSubscription = subscriptions.subscribeToMessages((payload: MessagePayload) => {
@@ -388,9 +432,44 @@ export default function WhatsAppHelpDesk() {
       const updatedTicket = tickets.find(t => t.id === selectedTicket.id);
       if (updatedTicket) {
         setSelectedTicket(updatedTicket);
+        // Load web chat messages if web chat ticket
+        if (updatedTicket.channel === 'web') {
+          loadWebChatMessages(updatedTicket);
+        } else {
+          setWebChatMessages([]);
+        }
       }
     }
-  }, [tickets, selectedTicket]);
+  }, [tickets, selectedTicket, loadWebChatMessages]);
+
+  // Real-time subscription for web chat messages + polling
+  useEffect(() => {
+    if (!selectedTicket || selectedTicket.channel !== 'web') return;
+    const channel = supabase
+      .channel('web_chat_messages_updates')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'chat_messages',
+        },
+        (payload) => {
+          if (payload.new.ticket_id === selectedTicket.id) {
+            setWebChatMessages((prev) => [...prev, payload.new]);
+          }
+        }
+      )
+      .subscribe();
+    // Polling every 5 seconds for latest messages
+    const interval = setInterval(() => {
+      loadWebChatMessages(selectedTicket);
+    }, 5000);
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+    };
+  }, [selectedTicket, loadWebChatMessages]);
 
   // Helper function to get agent for assignment
   const getAgentForAssignment = (category: string, whatsappNumber?: string): Agent | undefined => {
@@ -1193,7 +1272,21 @@ export default function WhatsAppHelpDesk() {
                               </option>
                             ))}
                           </select>
-                          
+                          <select
+                            value={selectedTicket.priority}
+                            onChange={async (e) => {
+                              const newPriority = e.target.value;
+                              await ticketsService.update(selectedTicket.id, { priority: newPriority });
+                              await loadTickets();
+                              showSuccess('Priority Updated', `Priority set to ${newPriority}`);
+                            }}
+                            className="px-2 py-1 text-xs border border-yellow-400 rounded text-black"
+                          >
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                            <option value="urgent">Urgent</option>
+                          </select>
                           <select
                             value={selectedTicket.status}
                             onChange={(e) => updateTicketStatus(selectedTicket.id, e.target.value)}
@@ -1339,12 +1432,46 @@ export default function WhatsAppHelpDesk() {
                         ))}
 
                         {/* For non-WhatsApp tickets, show a placeholder for future replies */}
-                        {selectedTicket.channel !== 'whatsapp' && (
+                        {/* Web Chat Messages */}
+                        {selectedTicket.channel === 'web' && (
+                          <div className="space-y-3">
+                            {webChatMessages.map((message) => (
+                              <div key={message.id} className={`flex ${message.sender_type === 'agent' ? 'justify-end' : 'justify-start'}`}>
+                                <div className={`max-w-xs px-3 py-2 rounded-lg ${
+                                  message.sender_type === 'agent'
+                                    ? 'bg-blue-600 text-white'
+                                    : message.sender_type === 'system'
+                                    ? 'bg-gray-200 text-gray-800'
+                                    : 'bg-white border border-gray-200 text-black'
+                                }`}>
+                                  <div className="flex items-center space-x-1 mb-1">
+                                    {message.sender_type === 'agent' && (
+                                      <User className="w-3 h-3 text-white" />
+                                    )}
+                                    {message.sender_type === 'system' && (
+                                      <AlertCircle className="w-3 h-3 text-gray-500" />
+                                    )}
+                                    <span className="text-xs font-medium">
+                                      {message.sender_name}
+                                    </span>
+                                  </div>
+                                  <p className="text-sm">{message.message_text}</p>
+                                  <div className={`text-xs mt-1 ${
+                                    message.sender_type === 'agent' ? 'text-blue-200' : 'text-gray-500'
+                                  }`}>
+                                    {new Date(message.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {/* For non-WhatsApp, non-web tickets, show a placeholder */}
+                        {selectedTicket.channel !== 'whatsapp' && selectedTicket.channel !== 'web' && (
                           <div className="text-center py-4">
                             <div className="text-xs text-gray-500 mb-2">
                               {selectedTicket.channel === 'email' && '📧 Email conversation will appear here'}
                               {selectedTicket.channel === 'phone' && '📞 Phone call notes will appear here'}
-                              {selectedTicket.channel === 'web' && '💬 Web chat messages will appear here'}
                             </div>
                             <div className="text-xs text-gray-400">
                               Use the reply section below to add notes or send responses
@@ -1434,21 +1561,98 @@ export default function WhatsAppHelpDesk() {
                             <span>
                               {selectedTicket.channel === 'email' && `Replying via email to ${selectedTicket.customer_phone}`}
                               {selectedTicket.channel === 'phone' && 'Add phone call notes or follow-up'}
-                              {selectedTicket.channel === 'web' && 'Add internal notes or web response'}
+                              {selectedTicket.channel === 'web' && 'Replying to user via web chat'}
                             </span>
                           </div>
-                          
                           <div className="flex space-x-3">
                             <textarea
                               value={replyMessage}
                               onChange={(e) => setReplyMessage(e.target.value)}
-                              placeholder={`Type your ${selectedTicket.channel} response or internal note...`}
+                              placeholder={`Type your ${selectedTicket.channel === 'web' ? 'web chat reply' : selectedTicket.channel + ' response or internal note'}...`}
                               className="flex-1 p-2 text-sm border border-gray-300 rounded resize-none focus:ring-1 focus:ring-blue-500 focus:border-transparent text-black"
                               rows={2}
+                              onPaste={async (e) => {
+                                if (selectedTicket.channel !== 'web') return;
+                                if (!e.clipboardData) return;
+                                const items = e.clipboardData.items;
+                                for (let i = 0; i < items.length; i++) {
+                                  const item = items[i];
+                                  if (item.type.indexOf('image') !== -1) {
+                                    const file = item.getAsFile();
+                                    if (file) {
+                                      const fileExt = file.name.split('.').pop() || 'png';
+                                      const filePath = `chat/${selectedTicket.session_id || selectedTicket.id}/${Date.now()}.${fileExt}`;
+                                      const { error } = await supabase.storage.from('chat-images').upload(filePath, file);
+                                      if (error) {
+                                        showError('Image Upload Failed', error.message || 'Failed to upload image');
+                                        return;
+                                      }
+                                      const { data: publicUrlData } = supabase.storage.from('chat-images').getPublicUrl(filePath);
+                                      const imageUrl = publicUrlData?.publicUrl;
+                                      if (imageUrl) {
+                                        await supabase.from('chat_messages').insert([
+                                          {
+                                            session_id: selectedTicket.session_id,
+                                            ticket_id: selectedTicket.id,
+                                            message_text: imageUrl,
+                                            message_type: 'image',
+                                            sender_type: 'agent',
+                                            sender_name: 'Agent',
+                                            is_read: false,
+                                            metadata: { pasted: true }
+                                          }
+                                        ]);
+                                        await loadWebChatMessages(selectedTicket);
+                                      }
+                                    }
+                                    e.preventDefault();
+                                    break;
+                                  }
+                                }
+                              }}
                             />
-                            <button 
-                              onClick={() => {
-                                if (replyMessage.trim()) {
+                            <button
+                              onClick={async () => {
+                                if (!replyMessage.trim()) return;
+                                if (selectedTicket.channel === 'web') {
+                                  // Send agent reply to chat_messages
+                                  try {
+                                    // session_id may not be present in selectedTicket, so fetch it if needed
+                                    let sessionId = selectedTicket.session_id;
+                                    if (!sessionId) {
+                                      // Try to fetch from chat_messages for this ticket
+                                      const { data: msgs } = await supabase
+                                        .from('chat_messages')
+                                        .select('session_id')
+                                        .eq('ticket_id', selectedTicket.id)
+                                        .limit(1);
+                                      sessionId = msgs && msgs.length > 0 ? msgs[0].session_id : null;
+                                    }
+                                    if (!sessionId) {
+                                      showError('Reply Failed', 'Session ID not found for this ticket');
+                                      return;
+                                    }
+                                    await supabase
+                                      .from('chat_messages')
+                                      .insert([
+                                        {
+                                          session_id: sessionId,
+                                          ticket_id: selectedTicket.id,
+                                          message_text: replyMessage,
+                                          message_type: 'text',
+                                          sender_type: 'agent',
+                                          sender_name: 'Agent',
+                                          is_read: false,
+                                          metadata: {}
+                                        }
+                                      ]);
+                                    setReplyMessage('');
+                                    // Optionally reload messages
+                                    await loadWebChatMessages(selectedTicket);
+                                  } catch (err) {
+                                    showError('Reply Failed', err?.message || 'Failed to send reply');
+                                  }
+                                } else {
                                   // Add internal note logic here
                                   showSuccess('Note Added', 'Note added to ticket (this would be saved in the database)');
                                   setReplyMessage('');
@@ -1457,7 +1661,7 @@ export default function WhatsAppHelpDesk() {
                               disabled={!replyMessage.trim()}
                               className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
                             >
-                              Add Note
+                              {selectedTicket.channel === 'web' ? 'Send' : 'Add Note'}
                             </button>
                           </div>
                         </div>
