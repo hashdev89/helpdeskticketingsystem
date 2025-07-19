@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Notification from './components/Notification';
 import AddAgentModal from './components/AddAgentModal';
+import EditAgentModalFull from './components/EditAgentModalFull';
 import { useNotification } from '../hooks/useNotification';
 import { useWhatsApp } from '../hooks/useWhatsApp';
 
@@ -46,6 +47,42 @@ import {
   subscriptions 
 } from '../lib/supabase.js';
 import { supabase } from '../lib/supabase';
+
+// Type for ticketsService including delete
+ type TicketsServiceType = {
+  getAll: () => Promise<any[]>;
+  getById: (id: any) => Promise<any>;
+  getByCustomerPhone: (customerPhone: any) => Promise<any[]>;
+  create: (ticket: any) => Promise<any>;
+  update: (id: any, updates: any, sendWhatsAppUpdate?: boolean) => Promise<any>;
+  getNextTicketNumber: () => Promise<string>;
+  reassign: (ticketId: any, newAgentId: any, sendWhatsAppUpdate?: boolean) => Promise<any>;
+  sendStatusUpdate: (ticketId: any, newStatus: any, note?: string, agentName?: string) => Promise<any>;
+  sendWhatsAppReply: (ticketId: any, message: any, agentName?: string) => Promise<any>;
+  createFromWhatsApp: (phoneNumber: any, customerName: any, message: any, whatsappNumber: any) => Promise<any>;
+  delete: (id: any) => Promise<any>;
+};
+
+const typedTicketsService = ticketsService as unknown as TicketsServiceType;
+
+import { LogOut } from 'lucide-react';
+// Logout handler
+function LogoutButton() {
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    window.location.href = '/login';
+  };
+  return (
+    <button
+      onClick={handleLogout}
+      className="w-full flex items-center px-3 py-2 text-left text-xs font-medium rounded-lg text-black hover:bg-red-50 mt-4 border-t border-gray-200 transition-colors"
+      title="Logout"
+    >
+      <LogOut className="w-4 h-4 mr-2 text-red-500" />
+      <span className="font-semibold text-red-600">Logout</span>
+    </button>
+  );
+}
 
 // Type definitions
 interface WhatsAppNumber {
@@ -161,7 +198,29 @@ interface MessagePayload {
   };
 }
 
+import { useRouter } from 'next/navigation';
+
 export default function WhatsAppHelpDesk() {
+  const router = useRouter();
+  React.useEffect(() => {
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        window.location.href = '/login';
+        return;
+      }
+      // Check if user exists in agents table
+      const { data: agent, error: agentError } = await supabase
+        .from('agents')
+        .select('*')
+        .eq('email', user.email)
+        .single();
+      if (agentError || !agent) {
+        await supabase.auth.signOut();
+        window.location.href = '/login';
+      }
+    })();
+  }, []);
   // Notification system
   const {
     notification,
@@ -173,6 +232,9 @@ export default function WhatsAppHelpDesk() {
     showWarning,
     showInfo
   } = useNotification();
+
+  // For demo: replace with real auth logic
+  const [currentUserRole, setCurrentUserRole] = useState<string>('admin'); // 'admin', 'supervisor', 'agent'
 
   // Client-side only flag to prevent hydration issues
   const [isClient, setIsClient] = useState(false);
@@ -219,18 +281,28 @@ export default function WhatsAppHelpDesk() {
   const [showManualTicketForm, setShowManualTicketForm] = useState(false);
   // Add Agent modal state
   const [showAddAgentForm, setShowAddAgentForm] = useState(false);
-  const [addAgentForm, setAddAgentForm] = useState({
-    name: '',
-    email: '',
-    role: 'agent',
-    expertise: '',
-    whatsappNumbers: '',
-    maxTickets: 10,
-    isActive: true
+  const [addAgentForm, setAddAgentForm] = useState<{
+  name: string;
+  email: string;
+  password: string;
+  role: string;
+  expertise: string;
+  whatsappNumbers: string;
+  maxTickets: number;
+  isActive: boolean;
+  }>({
+  name: '',
+  email: '',
+  password: '',
+  role: 'agent',
+  expertise: '',
+  whatsappNumbers: '',
+  maxTickets: 10,
+  isActive: true
   });
   const [addingAgent, setAddingAgent] = useState(false);
   const [isEditingAgent, setIsEditingAgent] = useState(false);
-  const [editingAgent, setEditingAgent] = useState(null);
+  const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   
   // Simulation state
   const [simulatedMessage, setSimulatedMessage] = useState('');
@@ -254,6 +326,32 @@ export default function WhatsAppHelpDesk() {
   });
   // Track ticket creation loading state
   const [creatingTicket, setCreatingTicket] = useState(false);
+
+  // Delete agent
+  const handleDeleteAgent = async (agentId: string) => {
+    if (!window.confirm('Are you sure you want to delete this agent?')) return;
+    try {
+      await agentsService.delete(agentId);
+      showSuccess('Agent Deleted', 'The agent was deleted successfully.');
+      await loadAgents();
+    } catch (err) {
+      const error = err as DatabaseError;
+      showError('Delete Agent Failed', error.message);
+    }
+  };
+
+  // Delete ticket
+  const handleDeleteTicket = async (ticketId: string) => {
+    if (!window.confirm('Are you sure you want to delete this ticket?')) return;
+    try {
+      await typedTicketsService.delete(ticketId);
+      showSuccess('Ticket Deleted', 'The ticket was deleted successfully.');
+      await loadTickets();
+    } catch (err) {
+      const error = err as DatabaseError;
+      showError('Delete Ticket Failed', error.message);
+    }
+  };
 
   // Database functions with proper error handling
   const loadAgents = useCallback(async () => {
@@ -280,7 +378,7 @@ export default function WhatsAppHelpDesk() {
 
   const loadTickets = useCallback(async () => {
     try {
-      const data: TicketData[] = await ticketsService.getAll();
+      const data: TicketData[] = await typedTicketsService.getAll();
       // Transform the data to match the component's expected format
       const transformedTickets: Ticket[] = data.map(ticket => ({
         ...ticket,
@@ -306,7 +404,7 @@ export default function WhatsAppHelpDesk() {
   const loadMessages = useCallback(async () => {
     try {
       // Load all messages
-      const allTickets: TicketData[] = await ticketsService.getAll();
+      const allTickets: TicketData[] = await typedTicketsService.getAll();
       let allMessages: WhatsAppMessage[] = [];
       
       for (const ticket of allTickets) {
@@ -496,7 +594,7 @@ export default function WhatsAppHelpDesk() {
     }
     setCreatingTicket(true);
     try {
-      const ticketId = await ticketsService.getNextTicketNumber();
+      const ticketId = await typedTicketsService.getNextTicketNumber();
       
       const assignedAgent = manualTicketForm.assignedAgentId 
         ? agents.find(a => a.id === manualTicketForm.assignedAgentId)
@@ -520,7 +618,7 @@ export default function WhatsAppHelpDesk() {
       };
 
       // Create ticket in database
-      const createdTicket = await ticketsService.create(newTicket);
+      const createdTicket = await typedTicketsService.create(newTicket);
 
       // Add status history
       await statusHistoryService.add(
@@ -600,7 +698,7 @@ export default function WhatsAppHelpDesk() {
   // Create ticket from WhatsApp message
   const createTicketFromWhatsApp = async (incomingMessage: WhatsAppMessage, customerName: string, whatsappNumber: string): Promise<Ticket> => {
     try {
-      const ticketId = await ticketsService.getNextTicketNumber();
+      const ticketId = await typedTicketsService.getNextTicketNumber();
       
       const waNumber = whatsappNumbers.find(wn => wn.number === whatsappNumber);
       const category = waNumber?.categories[0] || 'support';
@@ -624,7 +722,7 @@ export default function WhatsAppHelpDesk() {
       };
 
       // Create ticket
-      const createdTicket = await ticketsService.create(newTicket);
+      const createdTicket = await typedTicketsService.create(newTicket);
 
       // Add incoming message
       const messageData = {
@@ -763,7 +861,7 @@ export default function WhatsAppHelpDesk() {
       if (!ticket) return;
 
       // Update ticket
-      await ticketsService.update(ticketId, { status: newStatus });
+      await typedTicketsService.update(ticketId, { status: newStatus });
 
       // Add status history
       await statusHistoryService.add(ticketId, newStatus, ticket.assigned_to || 'System', note || `Status updated to ${newStatus}`);
@@ -810,7 +908,7 @@ export default function WhatsAppHelpDesk() {
       const oldAgent = agents.find(a => a.id === oldTicket?.assigned_to);
 
       // Update ticket
-      await ticketsService.update(ticketId, {
+      await typedTicketsService.update(ticketId, {
         assigned_to: newAgent.name,
         assigned_agent_id: newAgentId
       });
@@ -850,13 +948,21 @@ export default function WhatsAppHelpDesk() {
 
   // Add Agent logic
   const handleAddAgent = async () => {
-    if (!addAgentForm.name.trim() || !addAgentForm.email.trim()) {
-      showWarning('Missing Fields', 'Please fill in all required fields (Name, Email)');
+    if (!addAgentForm.name.trim() || !addAgentForm.email.trim() || !addAgentForm.password) {
+      showWarning('Missing Fields', 'Please fill in all required fields (Name, Email, Password)');
       return;
     }
     setAddingAgent(true);
     try {
+      // 1. Create user in Supabase Auth
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: addAgentForm.email,
+        password: addAgentForm.password,
+      });
+      if (signUpError) throw signUpError;
+      // 2. Add to agents table
       const newAgent = {
+        id: data.user?.id,
         name: addAgentForm.name.trim(),
         email: addAgentForm.email.trim(),
         role: addAgentForm.role,
@@ -872,6 +978,7 @@ export default function WhatsAppHelpDesk() {
       setAddAgentForm({
         name: '',
         email: '',
+        password: '',
         role: 'agent',
         expertise: '',
         whatsappNumbers: '',
@@ -955,14 +1062,81 @@ export default function WhatsAppHelpDesk() {
           <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
           <p className="text-gray-600 text-sm">Loading WhatsApp Help Desk...</p>
         </div>
-      <AddAgentModal
-        open={showAddAgentForm}
-        onClose={() => setShowAddAgentForm(false)}
-        form={addAgentForm}
-        setForm={setAddAgentForm}
-        loading={addingAgent}
-        onSubmit={handleAddAgent}
-      />
+      {/* Add Agent Modal (for adding) */}
+      {!isEditingAgent && (
+        <AddAgentModal
+          open={showAddAgentForm}
+          onClose={() => {
+            setShowAddAgentForm(false);
+            setIsEditingAgent(false);
+            setEditingAgent(null);
+            setAddAgentForm({
+              name: '',
+              email: '',
+              password: '',
+              role: 'agent',
+              expertise: '',
+              whatsappNumbers: '',
+              maxTickets: 10,
+              isActive: true
+            });
+          }}
+          form={addAgentForm}
+          setForm={setAddAgentForm}
+          loading={addingAgent}
+          onSubmit={handleAddAgent}
+        />
+      )}
+      {/* Edit Agent Modal (for editing) */}
+      {isEditingAgent && (
+        <EditAgentModalFull
+          open={showAddAgentForm}
+          onClose={() => {
+            setShowAddAgentForm(false);
+            setIsEditingAgent(false);
+            setEditingAgent(null);
+            setAddAgentForm({
+              name: '',
+              email: '',
+              password: '',
+              role: 'agent',
+              expertise: '',
+              whatsappNumbers: '',
+              maxTickets: 10,
+              isActive: true
+            });
+          }}
+          agent={editingAgent}
+          loading={addingAgent}
+          onSave={async (updated) => {
+            if (editingAgent) {
+              setAddingAgent(true);
+              try {
+                await updateAgent(editingAgent.id, updated);
+                showSuccess('Agent Updated', 'The agent was updated successfully.');
+                setShowAddAgentForm(false);
+                setIsEditingAgent(false);
+                setEditingAgent(null);
+                setAddAgentForm({
+                  name: '',
+                  email: '',
+                  password: '',
+                  role: 'agent',
+                  expertise: '',
+                  whatsappNumbers: '',
+                  maxTickets: 10,
+                  isActive: true
+                });
+              } catch (err) {
+                const error = err as DatabaseError;
+                showError('Update Agent Failed', error.message);
+              } finally {
+                setAddingAgent(false);
+              }
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1003,9 +1177,9 @@ export default function WhatsAppHelpDesk() {
         onClose={hideNotification}
         position={notification.position} ticketId={undefined} priority={undefined} assignee={undefined} timestamp={undefined}      />
       <div className="h-screen bg-gray-50 text-sm flex flex-col" style={{ color: '#f1f1f1', fontFamily: 'Arial, sans-serif' }}>
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-1 flex-col md:flex-row overflow-hidden">
         {/* Sidebar */}
-        <div className="w-64 bg-white shadow-sm border-r">
+        <div className="w-full md:w-64 bg-white shadow-sm border-r flex-shrink-0">
           <div className="p-4 border-b">
             <h1 className="text-lg font-bold text-black">Indra IT Help Desk</h1>
             <p className="text-xs text-gray-800">2025 Copyrighted Indra IT</p>
@@ -1065,34 +1239,7 @@ export default function WhatsAppHelpDesk() {
                 </span>
               </button>
             </div>
-            
-            <div className="mt-4 px-3 border-t pt-3">
-              <div className="text-xs font-medium text-gray-700 mb-2">Quick Actions</div>
-              
-              <button 
-                onClick={() => setShowManualTicketForm(true)}
-                className="w-full flex items-center px-3 py-2 text-left text-xs text-purple-600 hover:bg-purple-50 rounded-lg border border-purple-200 mb-2"
-              >
-                <FileText className="w-4 h-4 mr-2" />
-                Create Ticket
-              </button>
-              
-              <button 
-                onClick={() => setShowIncomingMessage(true)}
-                className="w-full flex items-center px-3 py-2 text-left text-xs text-blue-600 hover:bg-blue-50 rounded-lg border border-blue-200 mb-2"
-              >
-                <Smartphone className="w-4 h-4 mr-2" />
-                Simulate Message
-              </button>
-              
-              <button 
-                onClick={() => setShowWhatsAppSetup(true)}
-                className="w-full flex items-center px-3 py-2 text-left text-xs text-black hover:bg-gray-50 rounded-lg"
-              >
-                <Settings className="w-4 h-4 mr-2" />
-                Database Info
-              </button>
-            </div>
+            <LogoutButton />
           </nav>
         </div>
 
@@ -1189,9 +1336,20 @@ export default function WhatsAppHelpDesk() {
                             <span className="text-xs bg-purple-100 text-purple-600 px-1 rounded">Manual</span>
                           )}
                         </div>
-                        <span className={`px-1.5 py-0.5 rounded-full text-xs font-medium ${getPriorityColor(ticket.priority)}`}>
-                          {ticket.priority}
-                        </span>
+                        <div className="flex items-center space-x-1">
+                          <span className={`px-1.5 py-0.5 rounded-full text-xs font-medium ${getPriorityColor(ticket.priority)}`}>
+                            {ticket.priority}
+                          </span>
+                          {currentUserRole === 'admin' && (
+                            <button
+                              onClick={e => { e.stopPropagation(); handleDeleteTicket(ticket.id); }}
+                              className="ml-2 px-2 py-0.5 bg-red-100 text-red-600 rounded hover:bg-red-200 text-xs"
+                              title="Delete Ticket"
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </div>
                       </div>
                       
                       <h3 className="text-sm font-medium text-black mb-1">{ticket.subject}</h3>
@@ -1301,7 +1459,7 @@ export default function WhatsAppHelpDesk() {
                             value={selectedTicket.priority}
                             onChange={async (e) => {
                               const newPriority = e.target.value;
-                              await ticketsService.update(selectedTicket.id, { priority: newPriority });
+                              await typedTicketsService.update(selectedTicket.id, { priority: newPriority });
                               await loadTickets();
                               showSuccess('Priority Updated', `Priority set to ${newPriority}`);
                             }}
@@ -1327,7 +1485,10 @@ export default function WhatsAppHelpDesk() {
                                 </div>
                                 <span className="text-black">{selectedTicket.assigned_to}</span>
                                 <span className="text-gray-600">
-                                  ({agents.find(a => a.id === selectedTicket.assigned_to)?.current_load || 0}/{agents.find(a => a.id === selectedTicket.assigned_to)?.max_tickets || 0} tickets)
+                                  {(() => {
+                                    const agent: Agent | undefined = agents.find(a => a.id === selectedTicket.assigned_to);
+                                    return `(${agent?.current_load || 0}/${agent?.max_tickets || 0} tickets)`;
+                                  })()}
                                 </span>
                               </div>
                             ) : (
@@ -1771,6 +1932,21 @@ export default function WhatsAppHelpDesk() {
 
                         <div className="mt-3 flex space-x-1">
                           <button
+                            onClick={() => {
+                              setIsEditingAgent(true);
+                              setEditingAgent(agent);
+                              setAddAgentForm({
+                                name: agent.name,
+                                email: agent.email,
+                                password: '',
+                                role: agent.role,
+                                expertise: agent.expertise.join(", "),
+                                whatsappNumbers: agent.whatsapp_numbers.join(", "),
+                                maxTickets: agent.max_tickets,
+                                isActive: agent.is_active
+                              });
+                              setShowAddAgentForm(true);
+                            }}
                             className="px-2 py-1 bg-gray-100 text-black text-xs rounded hover:bg-gray-200 flex items-center space-x-1"
                           >
                             <Edit className="w-3 h-3" />
@@ -1787,6 +1963,15 @@ export default function WhatsAppHelpDesk() {
                             <Activity className="w-3 h-3" />
                             <span>{agent.is_active ? 'Deactivate' : 'Activate'}</span>
                           </button>
+                          {currentUserRole === 'admin' && (
+                            <button
+                              onClick={() => handleDeleteAgent(agent.id)}
+                              className="px-2 py-1 bg-red-100 text-red-600 text-xs rounded hover:bg-red-200"
+                              title="Delete Agent"
+                            >
+                              Delete
+                            </button>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -1987,9 +2172,12 @@ export default function WhatsAppHelpDesk() {
                     </span>
                   </div>
                   <div><span className="text-gray-600">Category:</span> <span className="ml-1 capitalize text-black">{manualTicketForm.category}</span></div>
-                  {manualTicketForm.assignedAgentId && (
-                    <div><span className="text-gray-600">Agent:</span> <span className="ml-1 text-black">{agents.find(a => a.id === manualTicketForm.assignedAgentId)?.name}</span></div>
-                  )}
+                  {manualTicketForm.assignedAgentId && (() => {
+                  const agent: Agent | undefined = agents.find(a => a.id === manualTicketForm.assignedAgentId);
+                  return (
+                  <div><span className="text-gray-600">Agent:</span> <span className="ml-1 text-black">{agent?.name}</span></div>
+                  );
+                  })()}
                 </div>
               </div>
 

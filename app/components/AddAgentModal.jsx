@@ -47,6 +47,19 @@ const AddAgentModal = ({
               placeholder="agent@example.com"
             />
           </div>
+          {!isEditing && (
+            <div>
+              <label className="block text-xs font-medium text-black mb-1">Password *</label>
+              <input
+                type="password"
+                value={form.password || ''}
+                onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-blue-500 text-black"
+                placeholder="Password"
+                required={!isEditing}
+              />
+            </div>
+          )}
           <div>
             <label className="block text-xs font-medium text-black mb-1">Role</label>
             <select

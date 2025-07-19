@@ -15,6 +15,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Self Ticketing App",
   description: "Indra Group Self Ticketing Application",
+  // Optional: Add Grammarly meta tags to disable it
+  other: {
+    'grammarly-disable-editor': 'true',
+    'grammarly-disable-indicator': 'true',
+  }
 };
 
 export default function RootLayout({
@@ -26,6 +31,7 @@ export default function RootLayout({
     <html lang="en">
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        suppressHydrationWarning={true}
       >
         {children}
       </body>
