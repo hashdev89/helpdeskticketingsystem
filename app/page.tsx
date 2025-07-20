@@ -47,6 +47,7 @@ import {
   subscriptions 
 } from '../lib/supabase.js';
 import { supabase } from '../lib/supabase';
+import { whatsappAPI } from '../lib/whatsapp-api';
 
 // Type for ticketsService including delete
  type TicketsServiceType = {
@@ -973,6 +974,15 @@ export default function WhatsAppHelpDesk() {
         current_load: 0
       };
       await agentsService.create(newAgent);
+      // Send WhatsApp message to each number added
+      const numbers = addAgentForm.whatsappNumbers.split(',').map(n => n.trim()).filter(Boolean);
+      for (const number of numbers) {
+        try {
+          await whatsappAPI.sendMessage(number, `Welcome! Your number has been added as an agent in the system.`);
+        } catch (e) {
+          console.error('Failed to send WhatsApp message to', number, e);
+        }
+      }
       showSuccess('Agent Added', 'The agent was added successfully.');
       setShowAddAgentForm(false);
       setAddAgentForm({
