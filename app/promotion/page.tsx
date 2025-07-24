@@ -8,6 +8,7 @@ export default function PromotionPage() {
     customer_name: "",
     customer_phone: "",
     preferred_vehicle: "",
+    remarks: "",
   });
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState("");
@@ -31,15 +32,15 @@ export default function PromotionPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
       recipient_number: form.customer_phone,
-      sms_text: "Thank for your interest in Indra Traders and our officer will contact you."
+      sms_text: `Hi ${form.customer_name}, thank you for visiting Indra Traders at the Auto Vision Motor Show BMICH! We’ve received your inquiry and will get in touch soon. Feel free to call us at 0777874422 for more info.`,
       })
       });
       } catch (e) {
       // Optionally handle SMS send error, but don't block success
       console.error("Failed to send SMS via SQL Server", e);
       }
-      setSuccess("Promotion submitted successfully!");
-      setForm({ customer_name: "", customer_phone: "", preferred_vehicle: "" });
+      setSuccess("Promotion details submitted successfully!");
+      setForm({ customer_name: "", customer_phone: "", preferred_vehicle: "" , remarks: "",});
     } catch (err: any) {
       setError(err.message || "Failed to submit promotion.");
     } finally {
@@ -53,7 +54,7 @@ export default function PromotionPage() {
         onSubmit={handleSubmit}
         className="bg-white p-8 rounded shadow-md w-full max-w-md space-y-4"
       >
-        <h1 className="text-2xl font-bold mb-4 text-black">Promotion Form</h1>
+        <h1 className="text-2xl font-bold mb-4 text-black">Promotions Info Form</h1>
         <div>
           <label className="block text-sm font-medium text-black mb-1">
             Customer Name
@@ -88,6 +89,19 @@ export default function PromotionPage() {
             type="text"
             name="preferred_vehicle"
             value={form.preferred_vehicle}
+            onChange={handleChange}
+            className="w-full px-3 py-2 border border-gray-300 rounded text-black"
+            required
+          />
+        </div>
+          <div>
+          <label className="block text-sm font-medium text-black mb-1">
+           Remarks
+          </label>
+          <input
+            type="text"
+            name="remarks"
+            value={form.remarks}
             onChange={handleChange}
             className="w-full px-3 py-2 border border-gray-300 rounded text-black"
             required
