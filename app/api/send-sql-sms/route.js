@@ -6,7 +6,7 @@ const config = {
   password: 'ssipl@123',
   server: '192.168.20.5',
   port: 1433,
-  database: 'CRM', // Use CRM for SMS_OUT
+  database: 'CRM', // Use CRM for SMS_OUTt
   options: {
     encrypt: false,
     trustServerCertificate: true,
