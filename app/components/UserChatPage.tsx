@@ -760,31 +760,17 @@ export default function UserChatPage() {
             }];
           });
 
-          // Update ticket status if metadata contains it
-          if (newMessage.metadata?.ticket_status) {
-            const newStatus = newMessage.metadata.ticket_status;
+          // Update ticket status if metadata contains it or if it's a status update message
+          if (newMessage.metadata?.ticket_status || newMessage.metadata?.is_status_update) {
+            const newStatus = newMessage.metadata?.ticket_status;
             console.log('🔄 Updating ticket status from message:', newStatus);
-            setTicketStatus(prev => prev ? {
-              ...prev,
-              status: newStatus
-            } : null);
             
-            // Also refresh ticket status from database to ensure sync
-            if (prev?.ticket_id) {
-              supabase
-                .from('tickets')
-                .select('id, status, assigned_agent_id')
-                .eq('id', prev.ticket_id)
-                .single()
-                .then(({ data, error }) => {
-                  if (!error && data) {
-                    console.log('✅ Refreshed ticket status from database:', data.status);
-                    setTicketStatus(currentStatus => currentStatus ? {
-                      ...currentStatus,
-                      status: data.status
-                    } : null);
-                  }
-                });
+            // Refresh ticket status from database to ensure sync
+            if (ticketStatus?.ticket_id) {
+              refreshTicketStatus(ticketStatus.ticket_id);
+            } else if (newMessage.ticket_id) {
+              // If we have ticket_id in message but not in state, refresh it
+              refreshTicketStatus(newMessage.ticket_id);
             }
           }
         }
@@ -843,6 +829,53 @@ export default function UserChatPage() {
     };
   }, [sessionId]);
 
+  // Function to refresh ticket status from database
+  const refreshTicketStatus = useCallback(async (ticketId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('tickets')
+        .select('id, status, assigned_agent_id, assigned_agent:agents!tickets_assigned_agent_fkey(name)')
+        .eq('id', ticketId)
+        .single();
+
+      if (!error && data) {
+        console.log('🔄 Refreshed ticket status from database:', data.status);
+        setTicketStatus(prev => prev ? {
+          ...prev,
+          status: data.status,
+          assigned_agent: data.assigned_agent?.name || prev.assigned_agent
+        } : null);
+
+        // Check if ticket is closed
+        if (data.status === 'closed') {
+          console.log('🔒 Ticket closed, clearing session');
+          setChatClosed(true);
+          setIsConnected(false);
+          localStorage.removeItem('chat_session_id');
+          
+          // Only add closure message if not already present
+          setMessages(prev => {
+            if (prev.some(m => m.sender_type === 'system' && m.message_text.includes('This chat has been closed'))) {
+              return prev;
+            }
+            const closureMessage: ChatMessage = {
+              id: `closure_${Date.now()}`,
+              message_text: 'This chat has been closed. Thank you for contacting support!',
+              sender_type: 'system',
+              sender_name: 'Support Bot',
+              created_at: new Date().toISOString()
+            };
+            return [...prev, closureMessage];
+          });
+        }
+        return data.status;
+      }
+    } catch (err) {
+      console.error('Error refreshing ticket status:', err);
+    }
+    return null;
+  }, []);
+
   // Real-time ticket status subscription
   useEffect(() => {
     if (!ticketStatus?.ticket_id) return;
@@ -861,7 +894,7 @@ export default function UserChatPage() {
         },
         (payload) => {
           const updatedTicket = payload.new;
-          console.log('📋 Ticket status updated:', {
+          console.log('📋 Ticket status updated via real-time:', {
             ticket_id: updatedTicket.id,
             status: updatedTicket.status
           });
@@ -877,7 +910,7 @@ export default function UserChatPage() {
             console.log('🔒 Ticket closed, clearing session');
             setChatClosed(true);
             setIsConnected(false);
-            localStorage.removeItem('chat_session_id'); // Clear saved session
+            localStorage.removeItem('chat_session_id');
             
             // Only add closure message if not already present
             setMessages(prev => {
@@ -893,7 +926,6 @@ export default function UserChatPage() {
               };
               return [...prev, closureMessage];
             });
-            // DO NOT reset chatStarted, sessionId, or messages
           }
         }
       )
@@ -904,10 +936,18 @@ export default function UserChatPage() {
         }
       });
 
+    // Polling fallback: Check status every 3 seconds in case real-time fails
+    const pollInterval = setInterval(() => {
+      if (ticketStatus?.ticket_id) {
+        refreshTicketStatus(ticketStatus.ticket_id);
+      }
+    }, 3000);
+
     return () => {
       supabase.removeChannel(ticketChannel);
+      clearInterval(pollInterval);
     };
-  }, [ticketStatus?.ticket_id]);
+  }, [ticketStatus?.ticket_id, refreshTicketStatus]);
 
   // Real-time typing indicators subscription
   useEffect(() => {
