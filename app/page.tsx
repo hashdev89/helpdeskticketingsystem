@@ -825,7 +825,7 @@ export default function WhatsAppHelpDesk() {
       // Refresh data
       await loadTickets();
       await loadAgents();
-      await loadMessages();
+      // Messages will load automatically when ticket is selected
 
       // Set as selected ticket
       const transformedTicket: Ticket = {
@@ -938,7 +938,7 @@ export default function WhatsAppHelpDesk() {
       // Refresh data
       await loadTickets();
       await loadAgents();
-      await loadMessages();
+      // Messages will load automatically when ticket is selected
 
       return {
         ...createdTicket,
@@ -1009,15 +1009,24 @@ export default function WhatsAppHelpDesk() {
       // Simulate delivery status updates
       setTimeout(async () => {
         await whatsappMessagesService.updateStatus(newMessage.id, 'delivered');
-        await loadMessages();
+        // Reload messages for selected ticket if it matches
+        if (selectedTicket?.id === ticketId) {
+          await loadMessagesForTicket(ticketId);
+        }
       }, 1000);
 
       setTimeout(async () => {
         await whatsappMessagesService.updateStatus(newMessage.id, 'read');
-        await loadMessages();
+        // Reload messages for selected ticket if it matches
+        if (selectedTicket?.id === ticketId) {
+          await loadMessagesForTicket(ticketId);
+        }
       }, 3000);
 
-      await loadMessages();
+      // Reload messages for selected ticket if it matches
+      if (selectedTicket?.id === ticketId) {
+        await loadMessagesForTicket(ticketId);
+      }
     } catch (err) {
       const error = err as DatabaseError;
       showError('Reply Failed', error.message);
@@ -1109,11 +1118,14 @@ export default function WhatsAppHelpDesk() {
 
       // Refresh data
       await loadTickets();
-      await loadMessages();
       
-      // Reload chat messages if it's a web-chat ticket
-      if (ticket.channel === 'web-chat' && selectedTicket?.id === ticketId) {
-        await loadWebChatMessages(ticket);
+      // Reload messages for selected ticket if it matches
+      if (selectedTicket?.id === ticketId) {
+        if (ticket.channel === 'whatsapp') {
+          await loadMessagesForTicket(ticketId);
+        } else if (ticket.channel === 'web-chat') {
+          await loadWebChatMessages(ticket);
+        }
       }
       
       showSuccess('Status Updated', `Ticket status updated to ${newStatus}${note ? ' with note' : ''}`);
