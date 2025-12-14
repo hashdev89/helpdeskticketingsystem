@@ -38,7 +38,8 @@ import {
   Folder,
   StickyNote,
   CheckSquare,
-  Square
+  Square,
+  Bot
 } from 'lucide-react';
 
 // Import Supabase functions
@@ -1727,6 +1728,17 @@ export default function WhatsAppHelpDesk() {
                 </span>
               </button>
             </div>
+            
+            <div className="mt-2 px-3">
+              <button 
+                onClick={() => router.push('/automated-agents')}
+                className="w-full flex items-center px-3 py-2 text-left text-xs rounded-lg text-black hover:bg-gray-50"
+              >
+                <Bot className="w-4 h-4 mr-2" />
+                Automated Agents
+              </button>
+            </div>
+            
             <LogoutButton />
           </nav>
         </div>
