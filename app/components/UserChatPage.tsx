@@ -762,10 +762,30 @@ export default function UserChatPage() {
 
           // Update ticket status if metadata contains it
           if (newMessage.metadata?.ticket_status) {
+            const newStatus = newMessage.metadata.ticket_status;
+            console.log('🔄 Updating ticket status from message:', newStatus);
             setTicketStatus(prev => prev ? {
               ...prev,
-              status: newMessage.metadata.ticket_status
+              status: newStatus
             } : null);
+            
+            // Also refresh ticket status from database to ensure sync
+            if (prev?.ticket_id) {
+              supabase
+                .from('tickets')
+                .select('id, status, assigned_agent_id')
+                .eq('id', prev.ticket_id)
+                .single()
+                .then(({ data, error }) => {
+                  if (!error && data) {
+                    console.log('✅ Refreshed ticket status from database:', data.status);
+                    setTicketStatus(currentStatus => currentStatus ? {
+                      ...currentStatus,
+                      status: data.status
+                    } : null);
+                  }
+                });
+            }
           }
         }
       )

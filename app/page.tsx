@@ -1053,9 +1053,11 @@ export default function WhatsAppHelpDesk() {
       }
 
       // Update ticket (note is stored in status_history, not in tickets table)
+      // Pass note in updates so it can be included in status update message
       await typedTicketsService.update(ticketId, { 
-        status: newStatus
-      });
+        status: newStatus,
+        note: note || undefined // Include note so it can be added to status message
+      }, true); // sendWhatsAppUpdate = true
 
       // Add status history
       await statusHistoryService.add(ticketId, newStatus, agentName || 'System', note || `Status updated to ${newStatus}`);
