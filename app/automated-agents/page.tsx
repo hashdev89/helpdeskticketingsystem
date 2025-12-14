@@ -25,7 +25,8 @@ import {
   Calendar,
   Sun,
   Moon,
-  Activity
+  Activity,
+  Tag
 } from 'lucide-react';
 import { useNotification } from '../../hooks/useNotification';
 import { supabase } from '../../lib/supabase';
@@ -134,7 +135,7 @@ export default function AutomatedAgentsPage() {
   const loadAutoReplyRules = async (): Promise<AutoReplyRule[]> => {
     try {
       // Check if table exists, if not return empty array
-      const { data, error } = await supabase
+      const { data, error } = await (supabase as any)
         .from('auto_reply_rules')
         .select('*')
         .order('priority', { ascending: false });
@@ -167,7 +168,7 @@ export default function AutomatedAgentsPage() {
 
       if (editingRule) {
         // Update existing rule
-        const { error } = await supabase
+        const { error } = await (supabase as any)
           .from('auto_reply_rules')
           .update(ruleData)
           .eq('id', editingRule.id);
@@ -176,7 +177,7 @@ export default function AutomatedAgentsPage() {
         showSuccess('Rule Updated', 'Auto-reply rule has been updated successfully');
       } else {
         // Create new rule
-        const { error } = await supabase
+        const { error } = await (supabase as any)
           .from('auto_reply_rules')
           .insert([ruleData]);
 
@@ -206,7 +207,7 @@ export default function AutomatedAgentsPage() {
     if (!confirm('Are you sure you want to delete this rule?')) return;
 
     try {
-      const { error } = await supabase
+      const { error } = await (supabase as any)
         .from('auto_reply_rules')
         .delete()
         .eq('id', id);
@@ -221,7 +222,7 @@ export default function AutomatedAgentsPage() {
 
   const handleToggleRule = async (rule: AutoReplyRule) => {
     try {
-      const { error } = await supabase
+      const { error } = await (supabase as any)
         .from('auto_reply_rules')
         .update({ enabled: !rule.enabled })
         .eq('id', rule.id);
@@ -491,47 +492,62 @@ export default function AutomatedAgentsPage() {
               {businessHours.enabled && (
                 <>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].map(day => (
-                      <div key={day} className="p-4 border border-gray-200 rounded-lg">
-                        <div className="flex items-center justify-between mb-3">
-                          <label className="flex items-center space-x-2">
-                            <input
-                              type="checkbox"
-                              checked={businessHours[day as keyof BusinessHours].enabled}
-                              onChange={(e) => setBusinessHours({
-                                ...businessHours,
-                                [day]: { ...businessHours[day as keyof BusinessHours], enabled: e.target.checked }
-                              })}
-                              className="rounded"
-                            />
-                            <span className="font-medium capitalize">{day}</span>
-                          </label>
-                        </div>
-                        {businessHours[day as keyof BusinessHours].enabled && (
-                          <div className="flex items-center space-x-2">
-                            <input
-                              type="time"
-                              value={businessHours[day as keyof BusinessHours].open}
-                              onChange={(e) => setBusinessHours({
-                                ...businessHours,
-                                [day]: { ...businessHours[day as keyof BusinessHours], open: e.target.value }
-                              })}
-                              className="px-3 py-2 border border-gray-300 rounded-lg"
-                            />
-                            <span className="text-gray-500">to</span>
-                            <input
-                              type="time"
-                              value={businessHours[day as keyof BusinessHours].close}
-                              onChange={(e) => setBusinessHours({
-                                ...businessHours,
-                                [day]: { ...businessHours[day as keyof BusinessHours], close: e.target.value }
-                              })}
-                              className="px-3 py-2 border border-gray-300 rounded-lg"
-                            />
+                    {(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const).map(day => {
+                      const getDayConfig = (d: typeof day): { open: string; close: string; enabled: boolean } => {
+                        switch (d) {
+                          case 'monday': return businessHours.monday;
+                          case 'tuesday': return businessHours.tuesday;
+                          case 'wednesday': return businessHours.wednesday;
+                          case 'thursday': return businessHours.thursday;
+                          case 'friday': return businessHours.friday;
+                          case 'saturday': return businessHours.saturday;
+                          case 'sunday': return businessHours.sunday;
+                        }
+                      };
+                      
+                      const dayConfig = getDayConfig(day);
+                      
+                      const updateDayConfig = (updates: Partial<{ open: string; close: string; enabled: boolean }>) => {
+                        const newConfig = { ...dayConfig, ...updates };
+                        setBusinessHours({
+                          ...businessHours,
+                          [day]: newConfig
+                        } as BusinessHours);
+                      };
+                      
+                      return (
+                        <div key={day} className="p-4 border border-gray-200 rounded-lg">
+                          <div className="flex items-center justify-between mb-3">
+                            <label className="flex items-center space-x-2">
+                              <input
+                                type="checkbox"
+                                checked={dayConfig.enabled}
+                                onChange={(e) => updateDayConfig({ enabled: e.target.checked })}
+                                className="rounded"
+                              />
+                              <span className="font-medium capitalize">{day}</span>
+                            </label>
                           </div>
-                        )}
-                      </div>
-                    ))}
+                          {dayConfig.enabled && (
+                            <div className="flex items-center space-x-2">
+                              <input
+                                type="time"
+                                value={dayConfig.open}
+                                onChange={(e) => updateDayConfig({ open: e.target.value })}
+                                className="px-3 py-2 border border-gray-300 rounded-lg"
+                              />
+                              <span className="text-gray-500">to</span>
+                              <input
+                                type="time"
+                                value={dayConfig.close}
+                                onChange={(e) => updateDayConfig({ close: e.target.value })}
+                                className="px-3 py-2 border border-gray-300 rounded-lg"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
 
                   <div className="mt-6">
