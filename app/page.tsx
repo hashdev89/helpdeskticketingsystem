@@ -464,24 +464,49 @@ export default function WhatsAppHelpDesk() {
   const loadInitialData = useCallback(async () => {
     try {
       setLoading(true);
+      setError(null);
+      
+      // Add timeout to prevent infinite loading
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Data loading timeout after 30 seconds')), 30000);
+      });
       
       // Load critical data first (agents and tickets) - these are needed for UI
-      await Promise.all([
-        loadAgents(),
-        loadTickets()
+      await Promise.race([
+        Promise.all([
+          loadAgents().catch(err => {
+            console.error('Error loading agents:', err);
+            setAgents([]); // Set empty array on error
+            return null;
+          }),
+          loadTickets().catch(err => {
+            console.error('Error loading tickets:', err);
+            setTickets([]); // Set empty array on error
+            return null;
+          })
+        ]),
+        timeoutPromise
       ]);
       
       // Load non-critical data after (whatsapp numbers can load later)
       // Don't load all messages - only load when ticket is selected
       loadWhatsappNumbers().catch(err => {
         console.warn('Error loading WhatsApp numbers:', err);
+        setWhatsappNumbers([]); // Set empty array on error
       });
       
     } catch (err) {
       const error = err as DatabaseError;
-      setError(error.message);
+      const errorMessage = error?.message || 'Failed to load data. Please check your connection and try again.';
+      setError(errorMessage);
       console.error('Error loading initial data:', error);
+      
+      // Set empty arrays so UI can still render
+      setAgents([]);
+      setTickets([]);
+      setWhatsappNumbers([]);
     } finally {
+      // Always set loading to false, even if there was an error
       setLoading(false);
     }
   }, [loadAgents, loadWhatsappNumbers, loadTickets]);
@@ -489,6 +514,20 @@ export default function WhatsAppHelpDesk() {
   useEffect(() => {
     setIsClient(true);
     loadInitialData();
+    
+    // Safety fallback: Force loading to false after 35 seconds if still loading
+    const safetyTimeout = setTimeout(() => {
+      setLoading(prevLoading => {
+        if (prevLoading) {
+          console.warn('Loading timeout - forcing UI to show');
+          setError(prevError => prevError || 'Loading took too long. Please refresh the page or check your connection.');
+          return false;
+        }
+        return prevLoading;
+      });
+    }, 35000);
+    
+    return () => clearTimeout(safetyTimeout);
   }, [loadInitialData]);
 
   // Set up real-time subscriptions
@@ -1421,9 +1460,15 @@ export default function WhatsAppHelpDesk() {
   if (!isClient || loading) {
     return (
       <div className="h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
+        <div className="text-center max-w-md px-4">
           <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
-          <p className="text-gray-600 text-sm">Loading WhatsApp Help Desk...</p>
+          <p className="text-gray-600 text-sm mb-2">Loading WhatsApp Help Desk...</p>
+          {error && (
+            <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md">
+              <p className="text-red-800 text-sm font-medium">Error: {error}</p>
+              <p className="text-red-600 text-xs mt-1">Please check your browser console for details.</p>
+            </div>
+          )}
         </div>
       {/* Add Agent Modal (for adding) */}
       {!isEditingAgent && (
