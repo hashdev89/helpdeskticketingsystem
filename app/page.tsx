@@ -57,7 +57,7 @@ import { whatsappAPI } from '../lib/whatsapp-api';
 
 // Type for ticketsService including delete
  type TicketsServiceType = {
-  getAll: () => Promise<any[]>;
+  getAll: (limit?: number) => Promise<any[]>;
   getById: (id: any) => Promise<any>;
   getByCustomerPhone: (customerPhone: any) => Promise<any[]>;
   create: (ticket: any) => Promise<any>;
@@ -405,7 +405,8 @@ export default function WhatsAppHelpDesk() {
 
   const loadTickets = useCallback(async () => {
     try {
-      const data: TicketData[] = await typedTicketsService.getAll();
+      // Limit to last 200 tickets for better performance
+      const data: TicketData[] = await typedTicketsService.getAll(200);
       // Transform the data to match the component's expected format
       const transformedTickets: Ticket[] = data.map(ticket => ({
         ...ticket,
@@ -429,21 +430,13 @@ export default function WhatsAppHelpDesk() {
     }
   }, []);
 
-  const loadMessages = useCallback(async () => {
+  // Load messages for a specific ticket (lazy loading - only when needed)
+  const loadMessagesForTicket = useCallback(async (ticketId: string) => {
     try {
-      // Load all messages
-      const allTickets: TicketData[] = await typedTicketsService.getAll();
-      let allMessages: WhatsAppMessage[] = [];
-      
-      for (const ticket of allTickets) {
-        if (ticket.channel === 'whatsapp') {
-          const messages = await whatsappMessagesService.getByTicketId(ticket.id);
-          allMessages = [...allMessages, ...messages];
-        }
-      }
+      const messages = await whatsappMessagesService.getByTicketId(ticketId);
       
       // Transform to match component format
-      const transformedMessages: WhatsAppMessage[] = allMessages.map(msg => ({
+      const transformedMessages: WhatsAppMessage[] = messages.map(msg => ({
         id: msg.id,
         message_type: msg.message_type,
         created_at: msg.created_at,
@@ -458,23 +451,32 @@ export default function WhatsAppHelpDesk() {
         isStatusUpdate: msg.isStatusUpdate
       }));
       
-      setWhatsappMessages(transformedMessages);
+      // Update messages for the selected ticket
+      if (selectedTicket?.id === ticketId) {
+        setWhatsappMessages(transformedMessages);
+      }
     } catch (err) {
       const error = err as DatabaseError;
-      console.error('Error loading messages:', error);
-      throw error;
+      console.error('Error loading messages for ticket:', error);
     }
-  }, []);
+  }, [selectedTicket]);
 
   const loadInitialData = useCallback(async () => {
     try {
       setLoading(true);
+      
+      // Load critical data first (agents and tickets) - these are needed for UI
       await Promise.all([
         loadAgents(),
-        loadWhatsappNumbers(),
-        loadTickets(),
-        loadMessages()
+        loadTickets()
       ]);
+      
+      // Load non-critical data after (whatsapp numbers can load later)
+      // Don't load all messages - only load when ticket is selected
+      loadWhatsappNumbers().catch(err => {
+        console.warn('Error loading WhatsApp numbers:', err);
+      });
+      
     } catch (err) {
       const error = err as DatabaseError;
       setError(error.message);
@@ -482,7 +484,7 @@ export default function WhatsAppHelpDesk() {
     } finally {
       setLoading(false);
     }
-  }, [loadAgents, loadWhatsappNumbers, loadTickets, loadMessages]);
+  }, [loadAgents, loadWhatsappNumbers, loadTickets]);
 
   useEffect(() => {
     setIsClient(true);
@@ -548,6 +550,16 @@ export default function WhatsAppHelpDesk() {
       }
     }
   }, [tickets, selectedTicket, loadWebChatMessages]);
+
+  // Load messages when a WhatsApp ticket is selected (lazy loading)
+  useEffect(() => {
+    if (selectedTicket && selectedTicket.channel === 'whatsapp' && selectedTicket.id) {
+      loadMessagesForTicket(selectedTicket.id);
+    } else if (selectedTicket?.channel !== 'whatsapp') {
+      // Clear messages when non-WhatsApp ticket is selected
+      setWhatsappMessages([]);
+    }
+  }, [selectedTicket, loadMessagesForTicket]);
 
   // Real-time subscription for web chat messages - Fixed for 'web-chat' channel
   useEffect(() => {
