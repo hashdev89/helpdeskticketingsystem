@@ -699,6 +699,53 @@ export default function UserChatPage() {
     }
   };
 
+  // Function to refresh ticket status from database (defined early so it can be used in message handler)
+  const refreshTicketStatus = useCallback(async (ticketId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('tickets')
+        .select('id, status, assigned_agent_id, assigned_agent:agents!tickets_assigned_agent_fkey(name)')
+        .eq('id', ticketId)
+        .single();
+
+      if (!error && data) {
+        console.log('🔄 Refreshed ticket status from database:', data.status);
+        setTicketStatus(prev => prev ? {
+          ...prev,
+          status: data.status,
+          assigned_agent: data.assigned_agent?.name || prev.assigned_agent
+        } : null);
+
+        // Check if ticket is closed
+        if (data.status === 'closed') {
+          console.log('🔒 Ticket closed, clearing session');
+          setChatClosed(true);
+          setIsConnected(false);
+          localStorage.removeItem('chat_session_id');
+          
+          // Only add closure message if not already present
+          setMessages(prev => {
+            if (prev.some(m => m.sender_type === 'system' && m.message_text.includes('This chat has been closed'))) {
+              return prev;
+            }
+            const closureMessage: ChatMessage = {
+              id: `closure_${Date.now()}`,
+              message_text: 'This chat has been closed. Thank you for contacting support!',
+              sender_type: 'system',
+              sender_name: 'Support Bot',
+              created_at: new Date().toISOString()
+            };
+            return [...prev, closureMessage];
+          });
+        }
+        return data.status;
+      }
+    } catch (err) {
+      console.error('Error refreshing ticket status:', err);
+    }
+    return null;
+  }, []);
+
   // Real-time message subscription - Listen to ALL messages for this session
   useEffect(() => {
     if (!sessionId) return;
@@ -829,7 +876,7 @@ export default function UserChatPage() {
     };
   }, [sessionId]);
 
-  // Function to refresh ticket status from database
+  // Function to refresh ticket status from database (defined early so it can be used in message handler)
   const refreshTicketStatus = useCallback(async (ticketId: string) => {
     try {
       const { data, error } = await supabase
