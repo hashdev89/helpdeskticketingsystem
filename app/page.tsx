@@ -461,14 +461,63 @@ export default function WhatsAppHelpDesk() {
     }
   }, [selectedTicket]);
 
+  // Test database connection first
+  const testDatabaseConnection = useCallback(async () => {
+    try {
+      // Check if environment variables are available
+      const hasEnvVars = typeof window !== 'undefined' && 
+        process.env.NEXT_PUBLIC_SUPABASE_URL && 
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      
+      if (!hasEnvVars) {
+        return {
+          success: false,
+          error: 'Environment variables not configured. Please set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel.'
+        };
+      }
+
+      // Try a simple query to test connection
+      const { data, error } = await supabase
+        .from('agents')
+        .select('count')
+        .limit(1);
+      
+      if (error) {
+        return {
+          success: false,
+          error: `Database connection failed: ${error.message}. Please check your Supabase project status.`
+        };
+      }
+      
+      return { success: true };
+    } catch (err) {
+      const error = err as Error;
+      return {
+        success: false,
+        error: `Connection test failed: ${error.message}. Please verify your Supabase credentials.`
+      };
+    }
+  }, []);
+
   const loadInitialData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       
+      // Test connection first
+      const connectionTest = await testDatabaseConnection();
+      if (!connectionTest.success) {
+        setError(connectionTest.error);
+        setAgents([]);
+        setTickets([]);
+        setWhatsappNumbers([]);
+        setLoading(false);
+        return;
+      }
+      
       // Add timeout to prevent infinite loading
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Data loading timeout after 30 seconds')), 30000);
+        setTimeout(() => reject(new Error('Data loading timeout after 30 seconds. This usually means the database connection is slow or failing.')), 30000);
       });
       
       // Load critical data first (agents and tickets) - these are needed for UI
@@ -497,7 +546,15 @@ export default function WhatsAppHelpDesk() {
       
     } catch (err) {
       const error = err as DatabaseError;
-      const errorMessage = error?.message || 'Failed to load data. Please check your connection and try again.';
+      let errorMessage = error?.message || 'Failed to load data. Please check your connection and try again.';
+      
+      // Provide more helpful error messages
+      if (errorMessage.includes('timeout')) {
+        errorMessage += ' This usually means:\n1. Environment variables are not set in Vercel\n2. Supabase project might be paused\n3. Network connectivity issues\n\nPlease check VERCEL_ENV_SETUP.md for setup instructions.';
+      } else if (errorMessage.includes('Missing Supabase')) {
+        errorMessage += '\n\nPlease set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel environment variables.';
+      }
+      
       setError(errorMessage);
       console.error('Error loading initial data:', error);
       
@@ -509,7 +566,7 @@ export default function WhatsAppHelpDesk() {
       // Always set loading to false, even if there was an error
       setLoading(false);
     }
-  }, [loadAgents, loadWhatsappNumbers, loadTickets]);
+  }, [loadAgents, loadWhatsappNumbers, loadTickets, testDatabaseConnection]);
 
   useEffect(() => {
     setIsClient(true);
@@ -1464,9 +1521,18 @@ export default function WhatsAppHelpDesk() {
           <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
           <p className="text-gray-600 text-sm mb-2">Loading WhatsApp Help Desk...</p>
           {error && (
-            <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md">
-              <p className="text-red-800 text-sm font-medium">Error: {error}</p>
-              <p className="text-red-600 text-xs mt-1">Please check your browser console for details.</p>
+            <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-md max-w-lg">
+              <p className="text-red-800 text-sm font-medium mb-2">Database Connection Error</p>
+              <div className="text-red-700 text-xs whitespace-pre-line">{error}</div>
+              <div className="mt-3 pt-3 border-t border-red-200">
+                <p className="text-red-600 text-xs font-medium mb-1">Quick Fix:</p>
+                <ol className="text-red-600 text-xs list-decimal list-inside space-y-1">
+                  <li>Go to Vercel Dashboard → Your Project → Settings → Environment Variables</li>
+                  <li>Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY</li>
+                  <li>Redeploy your project</li>
+                  <li>Check if your Supabase project is active (not paused)</li>
+                </ol>
+              </div>
             </div>
           )}
         </div>
