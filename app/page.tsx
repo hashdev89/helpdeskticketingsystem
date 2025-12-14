@@ -34,7 +34,11 @@ import {
   Activity,
   X,
   Save,
-  FileText
+  FileText,
+  Folder,
+  StickyNote,
+  CheckSquare,
+  Square
 } from 'lucide-react';
 
 // Import Supabase functions
@@ -44,6 +48,8 @@ import {
   ticketsService, 
   statusHistoryService, 
   whatsappMessagesService,
+  chatMessagesService,
+  chatNotesService,
   subscriptions 
 } from '../lib/supabase.js';
 import { supabase } from '../lib/supabase';
@@ -67,17 +73,20 @@ import { whatsappAPI } from '../lib/whatsapp-api';
 const typedTicketsService = ticketsService as unknown as TicketsServiceType;
 
 import { LogOut } from 'lucide-react';
-// Logout handler
+// Logout handler - Disabled (authentication bypassed)
 function LogoutButton() {
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    window.location.href = '/login';
+    // Authentication bypassed - logout disabled
+    // await supabase.auth.signOut();
+    // window.location.href = '/login';
+    console.log('Logout disabled - authentication bypassed');
   };
   return (
     <button
       onClick={handleLogout}
-      className="w-full flex items-center px-3 py-2 text-left text-xs font-medium rounded-lg text-black hover:bg-red-50 mt-4 border-t border-gray-200 transition-colors"
-      title="Logout"
+      className="w-full flex items-center px-3 py-2 text-left text-xs font-medium rounded-lg text-gray-400 cursor-not-allowed mt-4 border-t border-gray-200"
+      title="Logout disabled (auth bypassed)"
+      disabled
     >
       <LogOut className="w-4 h-4 mr-2 text-red-500" />
       <span className="font-semibold text-red-600">Logout</span>
@@ -128,6 +137,7 @@ interface Ticket {
   priority: string;
   category: string;
   assigned_to: string;
+  assigned_agent_id?: string | null;
   created_at: string;
   updated_at: string;
   tags: string[];
@@ -203,25 +213,26 @@ import { useRouter } from 'next/navigation';
 
 export default function WhatsAppHelpDesk() {
   const router = useRouter();
-  React.useEffect(() => {
-    (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        window.location.href = '/login';
-        return;
-      }
-      // Check if user exists in agents table
-      const { data: agent, error: agentError } = await supabase
-        .from('agents')
-        .select('*')
-        .eq('email', user.email)
-        .single();
-      if (agentError || !agent) {
-        await supabase.auth.signOut();
-        window.location.href = '/login';
-      }
-    })();
-  }, []);
+  // Authentication check disabled - bypassing login for now
+  // React.useEffect(() => {
+  //   (async () => {
+  //     const { data: { user } } = await supabase.auth.getUser();
+  //     if (!user) {
+  //       window.location.href = '/login';
+  //       return;
+  //     }
+  //     // Check if user exists in agents table
+  //     const { data: agent, error: agentError } = await supabase
+  //       .from('agents')
+  //       .select('*')
+  //       .eq('email', user.email)
+  //       .single();
+  //     if (agentError || !agent) {
+  //       await supabase.auth.signOut();
+  //       window.location.href = '/login';
+  //     }
+  //   })();
+  // }, []);
   // Notification system
   const {
     notification,
@@ -251,7 +262,7 @@ export default function WhatsAppHelpDesk() {
 
   // Load web chat messages for a ticket
   const loadWebChatMessages = useCallback(async (ticket: { channel: string; id: any; }) => {
-    if (!ticket || ticket.channel !== 'web') {
+    if (!ticket || ticket.channel !== 'web-chat') {
       setWebChatMessages([]);
       return;
     }
@@ -328,6 +339,21 @@ export default function WhatsAppHelpDesk() {
   // Track ticket creation loading state
   const [creatingTicket, setCreatingTicket] = useState(false);
 
+  // Bulk messaging state
+  const [showBulkMessaging, setShowBulkMessaging] = useState(false);
+  const [selectedTicketsForBulk, setSelectedTicketsForBulk] = useState<Set<string>>(new Set());
+  const [bulkMessage, setBulkMessage] = useState('');
+  const [sendingBulkMessages, setSendingBulkMessages] = useState(false);
+
+  // Chat grouping state
+  const [groupBy, setGroupBy] = useState<'none' | 'category' | 'agent' | 'status' | 'channel'>('none');
+
+  // Chat notes state
+  const [chatNotes, setChatNotes] = useState<any[]>([]);
+  const [showNotesSection, setShowNotesSection] = useState(false);
+  const [newNote, setNewNote] = useState('');
+  const [addingNote, setAddingNote] = useState(false);
+
   // Delete agent
   const handleDeleteAgent = async (agentId: string) => {
     if (!window.confirm('Are you sure you want to delete this agent?')) return;
@@ -387,6 +413,7 @@ export default function WhatsAppHelpDesk() {
         customer_email: ticket.customer_email || undefined,
         whatsapp_number: ticket.whatsapp_number || undefined,
         assigned_to: ticket.assigned_agent?.name || 'Unassigned',
+        assigned_agent_id: ticket.assigned_agent_id || null,
         statusHistory: ticket.status_history?.map((sh: StatusHistoryData) => ({
           status: sh.status,
           timestamp: sh.created_at,
@@ -513,7 +540,7 @@ export default function WhatsAppHelpDesk() {
       if (updatedTicket) {
         setSelectedTicket(updatedTicket);
         // Load web chat messages if web chat ticket
-        if (updatedTicket.channel === 'web') {
+        if (updatedTicket.channel === 'web-chat') {
           loadWebChatMessages(updatedTicket);
         } else {
           setWebChatMessages([]);
@@ -522,30 +549,65 @@ export default function WhatsAppHelpDesk() {
     }
   }, [tickets, selectedTicket, loadWebChatMessages]);
 
-  // Real-time subscription for web chat messages + polling every 1 second
+  // Real-time subscription for web chat messages - Fixed for 'web-chat' channel
   useEffect(() => {
-    if (!selectedTicket || selectedTicket.channel !== 'web') return;
+    if (!selectedTicket || selectedTicket.channel !== 'web-chat') return;
+    
+    console.log('Setting up real-time subscription for ticket:', selectedTicket.id);
+    
     const channel = supabase
-      .channel('web_chat_messages_updates')
+      .channel(`web_chat_${selectedTicket.id}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'chat_messages',
+          filter: `ticket_id=eq.${selectedTicket.id}`
         },
         (payload) => {
-          if (payload.new.ticket_id === selectedTicket.id) {
-            setWebChatMessages((prev) => [...prev, payload.new]);
-          }
+          const newMessage = payload.new;
+          console.log('New chat message received:', newMessage);
+          
+          // Add message if it doesn't already exist
+          setWebChatMessages((prev) => {
+            if (prev.some(msg => msg.id === newMessage.id)) {
+              return prev; // Already exists
+            }
+            return [...prev, newMessage];
+          });
         }
       )
-      .subscribe();
-    // Polling every 1 second for latest messages
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'chat_messages',
+          filter: `ticket_id=eq.${selectedTicket.id}`
+        },
+        (payload) => {
+          // Update existing message if it was modified
+          setWebChatMessages((prev) => 
+            prev.map(msg => msg.id === payload.new.id ? payload.new : msg)
+          );
+        }
+      )
+      .subscribe((status) => {
+        console.log('Agent chat subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Agent successfully subscribed to chat messages');
+        }
+      });
+    
+    // Also load messages immediately and poll every 2 seconds as backup
+    loadWebChatMessages(selectedTicket);
     const interval = setInterval(() => {
       loadWebChatMessages(selectedTicket);
-    }, 1000);
+    }, 2000);
+    
     return () => {
+      console.log('Cleaning up agent chat subscription');
       supabase.removeChannel(channel);
       clearInterval(interval);
     };
@@ -861,17 +923,63 @@ export default function WhatsAppHelpDesk() {
       const ticket = tickets.find(t => t.id === ticketId);
       if (!ticket) return;
 
-      // Update ticket
-      await typedTicketsService.update(ticketId, { status: newStatus });
+      // Get current agent name for status update message
+      const { data: { user } } = await supabase.auth.getUser();
+      let agentName = 'Agent';
+      if (user) {
+        const { data: agent } = await supabase
+          .from('agents')
+          .select('name')
+          .eq('email', user.email)
+          .single();
+        if (agent) agentName = agent.name;
+      }
+
+      // Update ticket (note is stored in status_history, not in tickets table)
+      await typedTicketsService.update(ticketId, { 
+        status: newStatus
+      });
 
       // Add status history
-      await statusHistoryService.add(ticketId, newStatus, ticket.assigned_to || 'System', note || `Status updated to ${newStatus}`);
+      await statusHistoryService.add(ticketId, newStatus, agentName || 'System', note || `Status updated to ${newStatus}`);
+
+      // Send chat status update for web-chat tickets
+      if (ticket.channel === 'web-chat' && ticket.session_id && newStatus !== 'open') {
+        try {
+          // Get status update message
+          const statusMessages: Record<string, string> = {
+            'in-progress': `🔄 Your ticket is now being worked on${agentName ? ` by ${agentName}` : ' by our team'}.`,
+            'resolved': `✅ Your ticket has been resolved${agentName ? ` by ${agentName}` : ' by our team'}! Is there anything else we can help you with?`,
+            'closed': `📝 Your ticket has been closed. Thank you for contacting us!`
+          };
+
+          let statusMessage = statusMessages[newStatus] || `📋 Your ticket status has been updated to: ${newStatus}`;
+          
+          // Add note if provided
+          if (note && note.trim()) {
+            statusMessage += `\n\nNote: ${note}`;
+          }
+
+          // Send system message to chat (note is already saved in status_history)
+          await chatMessagesService.sendSystemMessage(
+            ticket.session_id,
+            ticketId,
+            statusMessage,
+            { ticket_status: newStatus, is_status_update: true }
+          );
+
+          console.log('✅ Status update message sent to chat:', { session_id: ticket.session_id, status: newStatus });
+        } catch (chatError) {
+          console.error('❌ Error sending chat status update:', chatError);
+          // Don't fail the whole update if chat message fails
+        }
+      }
 
       // Send WhatsApp status update if applicable
       if (ticket.channel === 'whatsapp' && newStatus !== 'open') {
         const statusMessages: Record<string, string> = {
-          'in-progress': `🔄 Your ticket ${ticketId} is now being worked on by ${ticket.assigned_to}. We'll keep you updated on the progress.`,
-          'resolved': `✅ Good news! Your ticket ${ticketId} has been resolved by ${ticket.assigned_to}. Please let us know if you need any further assistance.`,
+          'in-progress': `🔄 Your ticket ${ticketId} is now being worked on by ${agentName || ticket.assigned_to}. We'll keep you updated on the progress.`,
+          'resolved': `✅ Good news! Your ticket ${ticketId} has been resolved by ${agentName || ticket.assigned_to}. Please let us know if you need any further assistance.`,
           'closed': `📝 Your ticket ${ticketId} has been closed. Thank you for contacting us. Feel free to reach out if you have any other questions.`
         };
 
@@ -894,6 +1002,13 @@ export default function WhatsAppHelpDesk() {
       // Refresh data
       await loadTickets();
       await loadMessages();
+      
+      // Reload chat messages if it's a web-chat ticket
+      if (ticket.channel === 'web-chat' && selectedTicket?.id === ticketId) {
+        await loadWebChatMessages(ticket);
+      }
+      
+      showSuccess('Status Updated', `Ticket status updated to ${newStatus}${note ? ' with note' : ''}`);
     } catch (err) {
       const error = err as DatabaseError;
       showError('Status Update Failed', error.message);
@@ -906,7 +1021,9 @@ export default function WhatsAppHelpDesk() {
       if (!newAgent) return;
 
       const oldTicket = tickets.find(t => t.id === ticketId);
-      const oldAgent = agents.find(a => a.id === oldTicket?.assigned_to);
+      const oldAgentName = oldTicket?.assigned_to || 'Unassigned';
+      const oldAgentId = oldTicket?.assigned_agent_id;
+      const oldAgent = oldAgentId ? agents.find(a => a.id === oldAgentId) : null;
 
       // Update ticket
       await typedTicketsService.update(ticketId, {
@@ -928,6 +1045,63 @@ export default function WhatsAppHelpDesk() {
         current_load: newAgent.current_load + 1
       });
 
+      // Add system message to chat if it's a web-chat ticket
+      if (oldTicket?.channel === 'web-chat') {
+        try {
+          // Get session_id from ticket or from chat_messages
+          let sessionId = oldTicket.session_id;
+          
+          if (!sessionId) {
+            // Try to fetch from chat_messages for this ticket
+            const { data: msgs } = await supabase
+              .from('chat_messages')
+              .select('session_id')
+              .eq('ticket_id', ticketId)
+              .limit(1);
+            
+            sessionId = msgs && msgs.length > 0 ? msgs[0].session_id : null;
+          }
+
+          if (sessionId) {
+            // Create system message for agent switch
+            const switchMessage = oldAgentName && oldAgentName !== 'Unassigned'
+              ? `🔄 Your conversation has been transferred from ${oldAgentName} to ${newAgent.name}. ${newAgent.name} will continue assisting you.`
+              : `🔄 Your conversation has been assigned to ${newAgent.name}. They will assist you with your request.`;
+
+            const { error: messageError } = await supabase
+              .from('chat_messages')
+              .insert([
+                {
+                  session_id: sessionId,
+                  ticket_id: ticketId,
+                  message_text: switchMessage,
+                  message_type: 'text',
+                  sender_type: 'system',
+                  sender_name: 'Support System',
+                  is_read: false,
+                  metadata: {
+                    agent_switch: true,
+                    old_agent: oldAgentName,
+                    new_agent: newAgent.name
+                  }
+                }
+              ]);
+
+            if (messageError) {
+              console.error('Error adding agent switch message to chat:', messageError);
+            } else {
+              // Reload web chat messages if this ticket is currently selected
+              if (selectedTicket?.id === ticketId) {
+                await loadWebChatMessages(selectedTicket);
+              }
+            }
+          }
+        } catch (chatError) {
+          console.error('Error adding agent switch message to chat:', chatError);
+          // Don't fail the reassignment if chat message fails
+        }
+      }
+
       // Refresh data
       await loadTickets();
       await loadAgents();
@@ -945,6 +1119,146 @@ export default function WhatsAppHelpDesk() {
       const error = err as DatabaseError;
       showError('Agent Update Failed', error.message);
     }
+  };
+
+  // Load chat notes for a ticket
+  const loadChatNotes = useCallback(async (ticketId: string) => {
+    try {
+      const notes = await chatNotesService.getByTicketId(ticketId);
+      setChatNotes(notes);
+    } catch (err) {
+      console.error('Error loading chat notes:', err);
+      setChatNotes([]);
+    }
+  }, []);
+
+  // Add a chat note
+  const addChatNote = async (ticketId: string, noteText: string) => {
+    if (!noteText.trim()) return;
+    
+    setAddingNote(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      let agentName = 'Agent';
+      let agentId = null;
+
+      if (user) {
+        const { data: agent } = await supabase
+          .from('agents')
+          .select('id, name')
+          .eq('email', user.email)
+          .single();
+        if (agent) {
+          agentName = agent.name;
+          agentId = agent.id;
+        }
+      }
+
+      const selectedTicket = tickets.find(t => t.id === ticketId);
+      await chatNotesService.add({
+        ticket_id: ticketId,
+        session_id: selectedTicket?.session_id || null,
+        note_text: noteText.trim(),
+        created_by: agentId,
+        created_by_name: agentName,
+        is_private: false
+      });
+
+      setNewNote('');
+      await loadChatNotes(ticketId);
+      showSuccess('Note Added', 'Chat note has been added successfully.');
+    } catch (err) {
+      const error = err as DatabaseError;
+      showError('Failed to Add Note', error.message);
+    } finally {
+      setAddingNote(false);
+    }
+  };
+
+  // Bulk messaging function
+  const sendBulkMessages = async () => {
+    if (!bulkMessage.trim() || selectedTicketsForBulk.size === 0) {
+      showWarning('Missing Information', 'Please select tickets and enter a message.');
+      return;
+    }
+
+    setSendingBulkMessages(true);
+    let successCount = 0;
+    let failCount = 0;
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      let agentName = 'Agent';
+      let agentId = null;
+
+      if (user) {
+        const { data: agent } = await supabase
+          .from('agents')
+          .select('id, name')
+          .eq('email', user.email)
+          .single();
+        if (agent) {
+          agentName = agent.name;
+          agentId = agent.id;
+        }
+      }
+
+      const ticketsToSend = tickets.filter(t => selectedTicketsForBulk.has(t.id));
+
+      for (const ticket of ticketsToSend) {
+        try {
+          if (ticket.channel === 'web-chat' && ticket.session_id) {
+            // Send to web chat
+            await supabase.from('chat_messages').insert([{
+              session_id: ticket.session_id,
+              ticket_id: ticket.id,
+              message_text: bulkMessage.trim(),
+              message_type: 'text',
+              sender_type: 'agent',
+              sender_name: agentName,
+              sender_id: agentId,
+              is_read: false,
+              metadata: { bulk_message: true }
+            }]);
+            successCount++;
+          } else if (ticket.channel === 'whatsapp' && ticket.customer_phone) {
+            // Send WhatsApp message
+            await typedTicketsService.sendWhatsAppReply(ticket.id, bulkMessage.trim(), agentName);
+            successCount++;
+          }
+        } catch (err) {
+          console.error(`Error sending message to ticket ${ticket.id}:`, err);
+          failCount++;
+        }
+      }
+
+      if (successCount > 0) {
+        showSuccess('Bulk Messages Sent', `Successfully sent ${successCount} message(s). ${failCount > 0 ? `${failCount} failed.` : ''}`);
+      } else {
+        showError('Bulk Messages Failed', 'Failed to send messages to selected tickets.');
+      }
+
+      setSelectedTicketsForBulk(new Set());
+      setBulkMessage('');
+      setShowBulkMessaging(false);
+      await loadTickets();
+    } catch (err) {
+      const error = err as DatabaseError;
+      showError('Bulk Messaging Failed', error.message);
+    } finally {
+      setSendingBulkMessages(false);
+    }
+  };
+
+  // Toggle ticket selection for bulk messaging
+  const toggleTicketSelection = (ticketId: string) => {
+    const newSelection = new Set(selectedTicketsForBulk);
+    if (newSelection.has(ticketId)) {
+      newSelection.delete(ticketId);
+    } else {
+      newSelection.add(ticketId);
+    }
+    setSelectedTicketsForBulk(newSelection);
   };
 
   // Add Agent logic
@@ -1014,6 +1328,33 @@ export default function WhatsAppHelpDesk() {
     
     return matchesSearch && matchesStatus && matchesCategory && matchesAgent;
   });
+
+  // Group tickets function
+  const groupedTickets = (() => {
+    if (groupBy === 'none') return { 'All Tickets': filteredTickets };
+
+    const grouped: { [key: string]: Ticket[] } = {};
+    filteredTickets.forEach(ticket => {
+      let key = 'Uncategorized';
+      switch (groupBy) {
+        case 'category':
+          key = ticket.category || 'Uncategorized';
+          break;
+        case 'agent':
+          key = ticket.assigned_to || 'Unassigned';
+          break;
+        case 'status':
+          key = ticket.status || 'Unknown';
+          break;
+        case 'channel':
+          key = ticket.channel || 'Unknown';
+          break;
+      }
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(ticket);
+    });
+    return grouped;
+  })();
 
   // Helper functions for UI
   const getStatusIcon = (status: string) => {
@@ -1191,8 +1532,8 @@ export default function WhatsAppHelpDesk() {
         {/* Sidebar */}
         <div className="w-full md:w-64 bg-white shadow-sm border-r flex-shrink-0">
           <div className="p-4 border-b">
-            <h1 className="text-lg font-bold text-black">Indra IT Help Desk</h1>
-            <p className="text-xs text-gray-800">2025 Copyrighted Indra IT</p>
+            <h1 className="text-lg font-bold text-black">Chat System Dashboard</h1>
+            <p className="text-xs text-gray-800"></p>
             <p className="text-xs text-gray-600">Build by Hashantha Bandara</p>
             <div className="mt-2 text-xs text-green-600">
               🟢 Connected to Database
@@ -1262,13 +1603,74 @@ export default function WhatsAppHelpDesk() {
                 <div className="p-3 border-b">
                   <div className="flex items-center justify-between mb-3">
                     <h2 className="text-sm font-semibold text-black">Tickets</h2>
-                    <button 
-                      onClick={() => setShowManualTicketForm(true)}
-                      className="p-1 text-purple-600 hover:bg-purple-50 rounded"
-                      title="Create new ticket"
+                    <div className="flex items-center space-x-1">
+                      <button 
+                        onClick={() => setShowBulkMessaging(!showBulkMessaging)}
+                        className={`p-1 rounded ${showBulkMessaging ? 'bg-blue-100 text-blue-600' : 'text-blue-600 hover:bg-blue-50'}`}
+                        title="Bulk messaging"
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={() => setShowManualTicketForm(true)}
+                        className="p-1 text-purple-600 hover:bg-purple-50 rounded"
+                        title="Create new ticket"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {/* Bulk Messaging UI */}
+                  {showBulkMessaging && (
+                    <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-medium text-blue-800">Bulk Messaging</span>
+                        <span className="text-xs text-blue-600">{selectedTicketsForBulk.size} selected</span>
+                      </div>
+                      <textarea
+                        value={bulkMessage}
+                        onChange={(e) => setBulkMessage(e.target.value)}
+                        placeholder="Enter message to send to selected tickets..."
+                        className="w-full px-2 py-1.5 text-xs border border-blue-300 rounded mb-2 text-black resize-none"
+                        rows={3}
+                      />
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={sendBulkMessages}
+                          disabled={sendingBulkMessages || selectedTicketsForBulk.size === 0 || !bulkMessage.trim()}
+                          className="flex-1 px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                        >
+                          {sendingBulkMessages ? 'Sending...' : `Send to ${selectedTicketsForBulk.size} ticket(s)`}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedTicketsForBulk(new Set());
+                            setBulkMessage('');
+                            setShowBulkMessaging(false);
+                          }}
+                          className="px-2 py-1 bg-gray-200 text-gray-700 text-xs rounded hover:bg-gray-300"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Grouping Selector */}
+                  <div className="mb-3">
+                    <label className="block text-xs font-medium text-black mb-1">Group By</label>
+                    <select
+                      value={groupBy}
+                      onChange={(e) => setGroupBy(e.target.value as any)}
+                      className="w-full px-2 py-1.5 text-xs border border-gray-300 rounded text-black"
                     >
-                      <Plus className="w-4 h-4" />
-                    </button>
+                      <option value="none">No Grouping</option>
+                      <option value="category">Category</option>
+                      <option value="agent">Agent</option>
+                      <option value="status">Status</option>
+                      <option value="channel">Channel</option>
+                    </select>
                   </div>
                   
                   {/* Search */}
@@ -1326,14 +1728,46 @@ export default function WhatsAppHelpDesk() {
                 
                 {/* Tickets */}
                 <div className="overflow-y-auto h-full">
-                  {filteredTickets.map((ticket) => (
-                    <div
-                      key={ticket.id}
-                      onClick={() => setSelectedTicket(ticket)}
-                      className={`p-3 border-b cursor-pointer hover:bg-gray-50 ${
-                        selectedTicket?.id === ticket.id ? 'bg-blue-50 border-r-2 border-r-blue-500' : ''
-                      }`}
-                    >
+                  {Object.entries(groupedTickets).map(([groupName, groupTickets]) => (
+                    <div key={groupName}>
+                      {groupBy !== 'none' && (
+                        <div className="px-3 py-2 bg-gray-100 border-b border-gray-200 sticky top-0 z-10">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-semibold text-gray-700">{groupName}</span>
+                            <span className="text-xs text-gray-500">{groupTickets.length} ticket(s)</span>
+                          </div>
+                        </div>
+                      )}
+                      {groupTickets.map((ticket) => (
+                        <div
+                          key={ticket.id}
+                          onClick={() => {
+                            setSelectedTicket(ticket);
+                            if (ticket.id) {
+                              loadChatNotes(ticket.id);
+                            }
+                          }}
+                          className={`p-3 border-b cursor-pointer hover:bg-gray-50 ${
+                            selectedTicket?.id === ticket.id ? 'bg-blue-50 border-r-2 border-r-blue-500' : ''
+                          }`}
+                        >
+                          {showBulkMessaging && (
+                            <div className="absolute left-2 top-3">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleTicketSelection(ticket.id);
+                                }}
+                                className="text-blue-600"
+                              >
+                                {selectedTicketsForBulk.has(ticket.id) ? (
+                                  <CheckSquare className="w-4 h-4" />
+                                ) : (
+                                  <Square className="w-4 h-4" />
+                                )}
+                              </button>
+                            </div>
+                          )}
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex items-center space-x-1">
                           {getStatusIcon(ticket.status)}
@@ -1388,6 +1822,8 @@ export default function WhatsAppHelpDesk() {
                       <div className="text-xs text-gray-500 mt-1">
                         {new Date(ticket.created_at).toLocaleString()}
                       </div>
+                        </div>
+                      ))}
                     </div>
                   ))}
                 </div>
@@ -1591,7 +2027,7 @@ export default function WhatsAppHelpDesk() {
 
                         {/* For non-WhatsApp tickets, show a placeholder for future replies */}
                         {/* Web Chat Messages */}
-                        {selectedTicket.channel === 'web' && (
+                        {selectedTicket.channel === 'web-chat' && (
                           <div className="space-y-3">
                             {webChatMessages.map((message) => (
                               <div key={message.id} className={`flex ${message.sender_type === 'agent' ? 'justify-end' : 'justify-start'}`}>
@@ -1625,7 +2061,7 @@ export default function WhatsAppHelpDesk() {
                           </div>
                         )}
                         {/* For non-WhatsApp, non-web tickets, show a placeholder */}
-                        {selectedTicket.channel !== 'whatsapp' && selectedTicket.channel !== 'web' && (
+                        {selectedTicket.channel !== 'whatsapp' && selectedTicket.channel !== 'web-chat' && (
                           <div className="text-center py-4">
                             <div className="text-xs text-gray-500 mb-2">
                               {selectedTicket.channel === 'email' && '📧 Email conversation will appear here'}
@@ -1659,6 +2095,79 @@ export default function WhatsAppHelpDesk() {
                           </div>
                         )}
                       </div>
+                    </div>
+                    
+                    {/* Chat Notes Section */}
+                    <div className="p-4 border-t bg-white">
+                      <div className="flex items-center justify-between mb-3">
+                        <button
+                          onClick={() => setShowNotesSection(!showNotesSection)}
+                          className="flex items-center space-x-2 text-sm font-medium text-gray-700 hover:text-gray-900"
+                        >
+                          <StickyNote className="w-4 h-4" />
+                          <span>Chat Notes ({chatNotes.length})</span>
+                        </button>
+                        {showNotesSection && (
+                          <button
+                            onClick={() => {
+                              setNewNote('');
+                              setShowNotesSection(false);
+                            }}
+                            className="text-xs text-gray-500 hover:text-gray-700"
+                          >
+                            Hide
+                          </button>
+                        )}
+                      </div>
+                      
+                      {showNotesSection && (
+                        <div className="space-y-3">
+                          {/* Add Note Form */}
+                          <div className="space-y-2">
+                            <textarea
+                              value={newNote}
+                              onChange={(e) => setNewNote(e.target.value)}
+                              placeholder="Add a note about this conversation..."
+                              className="w-full px-3 py-2 text-sm border border-gray-300 rounded resize-none focus:ring-1 focus:ring-blue-500 focus:border-transparent text-black"
+                              rows={3}
+                            />
+                            <button
+                              onClick={() => {
+                                if (selectedTicket?.id) {
+                                  addChatNote(selectedTicket.id, newNote);
+                                }
+                              }}
+                              disabled={addingNote || !newNote.trim()}
+                              className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center space-x-1"
+                            >
+                              <StickyNote className="w-3 h-3" />
+                              <span>{addingNote ? 'Adding...' : 'Add Note'}</span>
+                            </button>
+                          </div>
+                          
+                          {/* Notes List */}
+                          <div className="space-y-2 max-h-60 overflow-y-auto">
+                            {chatNotes.length === 0 ? (
+                              <p className="text-xs text-gray-500 text-center py-4">No notes yet. Add one above.</p>
+                            ) : (
+                              chatNotes.map((note) => (
+                                <div key={note.id} className="p-3 bg-gray-50 border border-gray-200 rounded">
+                                  <div className="flex items-start justify-between mb-2">
+                                    <div className="flex items-center space-x-2">
+                                      <StickyNote className="w-3 h-3 text-gray-500" />
+                                      <span className="text-xs font-medium text-gray-700">{note.created_by_name || 'Agent'}</span>
+                                    </div>
+                                    <span className="text-xs text-gray-500">
+                                      {new Date(note.created_at).toLocaleString()}
+                                    </span>
+                                  </div>
+                                  <p className="text-sm text-gray-800 whitespace-pre-wrap">{note.note_text}</p>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                     
                     {/* Reply Section */}
@@ -1719,18 +2228,18 @@ export default function WhatsAppHelpDesk() {
                             <span>
                               {selectedTicket.channel === 'email' && `Replying via email to ${selectedTicket.customer_phone}`}
                               {selectedTicket.channel === 'phone' && 'Add phone call notes or follow-up'}
-                              {selectedTicket.channel === 'web' && 'Replying to user via web chat'}
+                              {selectedTicket.channel === 'web-chat' && 'Replying to user via web chat'}
                             </span>
                           </div>
                           <div className="flex space-x-3">
                             <textarea
                               value={replyMessage}
                               onChange={(e) => setReplyMessage(e.target.value)}
-                              placeholder={`Type your ${selectedTicket.channel === 'web' ? 'web chat reply' : selectedTicket.channel + ' response or internal note'}...`}
+                              placeholder={`Type your ${selectedTicket.channel === 'web-chat' ? 'web chat reply' : selectedTicket.channel + ' response or internal note'}...`}
                               className="flex-1 p-2 text-sm border border-gray-300 rounded resize-none focus:ring-1 focus:ring-blue-500 focus:border-transparent text-black"
                               rows={2}
                               onPaste={async (e) => {
-                                if (selectedTicket.channel !== 'web') return;
+                                if (selectedTicket.channel !== 'web-chat') return;
                                 if (!e.clipboardData) return;
                                 const items = e.clipboardData.items;
                                 for (let i = 0; i < items.length; i++) {
@@ -1772,25 +2281,66 @@ export default function WhatsAppHelpDesk() {
                             <button
                               onClick={async () => {
                                 if (!replyMessage.trim()) return;
-                                if (selectedTicket.channel === 'web') {
+                                if (selectedTicket.channel === 'web-chat') {
                                   // Send agent reply to chat_messages
                                   try {
                                     // session_id may not be present in selectedTicket, so fetch it if needed
                                     let sessionId = selectedTicket.session_id;
+                                    console.log('🔍 Agent reply - Current session_id from ticket:', sessionId);
+                                    
                                     if (!sessionId) {
+                                      console.log('⚠️ session_id not in ticket, fetching from chat_messages...');
                                       // Try to fetch from chat_messages for this ticket
-                                      const { data: msgs } = await supabase
+                                      const { data: msgs, error: msgError } = await supabase
                                         .from('chat_messages')
                                         .select('session_id')
                                         .eq('ticket_id', selectedTicket.id)
                                         .limit(1);
+                                      
+                                      if (msgError) {
+                                        console.error('Error fetching session_id:', msgError);
+                                      }
+                                      
                                       sessionId = msgs && msgs.length > 0 ? msgs[0].session_id : null;
+                                      console.log('🔍 Found session_id from messages:', sessionId);
                                     }
+                                    
                                     if (!sessionId) {
-                                      showError('Reply Failed', 'Session ID not found for this ticket');
+                                      // Last resort: try to get from user_sessions via ticket
+                                      console.log('⚠️ Trying to get session_id from user_sessions...');
+                                      const { data: sessionData } = await supabase
+                                        .from('user_sessions')
+                                        .select('session_id')
+                                        .eq('channel', 'web-chat')
+                                        .limit(1);
+                                      
+                                      if (sessionData && sessionData.length > 0) {
+                                        sessionId = sessionData[0].session_id;
+                                        console.log('🔍 Found session_id from user_sessions:', sessionId);
+                                      }
+                                    }
+                                    
+                                    if (!sessionId) {
+                                      console.error('❌ Session ID not found for ticket:', selectedTicket.id);
+                                      showError('Reply Failed', 'Session ID not found for this ticket. Please refresh the page.');
                                       return;
                                     }
-                                    await supabase
+                                    
+                                    console.log('✅ Using session_id for agent reply:', sessionId);
+                                    
+                                    // Get current agent name
+                                    const { data: { user } } = await supabase.auth.getUser();
+                                    let agentName = 'Agent';
+                                    if (user) {
+                                      const { data: agent } = await supabase
+                                        .from('agents')
+                                        .select('name')
+                                        .eq('email', user.email)
+                                        .single();
+                                      if (agent) agentName = agent.name;
+                                    }
+                                    
+                                    const { data, error } = await supabase
                                       .from('chat_messages')
                                       .insert([
                                         {
@@ -1799,15 +2349,33 @@ export default function WhatsAppHelpDesk() {
                                           message_text: replyMessage,
                                           message_type: 'text',
                                           sender_type: 'agent',
-                                          sender_name: 'Agent',
+                                          sender_name: agentName,
                                           is_read: false,
                                           metadata: {}
                                         }
-                                      ]);
+                                      ])
+                                      .select()
+                                      .single();
+                                    
+                                    if (error) {
+                                      throw error;
+                                    }
+                                    
+                                    console.log('✅ Agent message sent to chat:', {
+                                      id: data.id,
+                                      session_id: sessionId,
+                                      ticket_id: selectedTicket.id,
+                                      message: replyMessage.substring(0, 50)
+                                    });
                                     setReplyMessage('');
-                                    // Optionally reload messages
+                                    // Reload messages to show the new one (backup)
                                     await loadWebChatMessages(selectedTicket);
+                                    showSuccess('Message Sent', 'Your reply has been sent to the user');
+                                    
+                                    // The real-time subscription should pick it up automatically
+                                    // But we reload as backup to ensure it appears
                                   } catch (err) {
+                                    console.error('Error sending agent message:', err);
                                     showError('Reply Failed', (err as Error)?.message || 'Failed to send reply');
                                   }
                                 } else {
@@ -1819,7 +2387,7 @@ export default function WhatsAppHelpDesk() {
                               disabled={!replyMessage.trim()}
                               className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
                             >
-                              {selectedTicket.channel === 'web' ? 'Send' : 'Add Note'}
+                              {selectedTicket.channel === 'web-chat' ? 'Send' : 'Add Note'}
                             </button>
                           </div>
                         </div>

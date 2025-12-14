@@ -32,7 +32,8 @@ export default function PromotionPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
       recipient_number: form.customer_phone,
-      sms_text: `Hi ${form.customer_name}, thank you for visiting Indra Traders at the Auto Vision Motor Show BMICH! We’ve received your inquiry and will get in touch soon. Feel free to call us at 0777874422 for more info.`,
+      sms_text: `Hi ${form.customer_name}, thank you for visiting our Indra Traders Mobile Stall today! 
+We’ve received your inquiry and our team will be in touch with you shortly. Meanwhile, if you’d like more details about our latest vehicle offers, feel free to call us on 077 787 4422.`,
       })
       });
       } catch (e) {

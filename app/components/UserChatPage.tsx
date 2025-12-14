@@ -88,9 +88,96 @@ export default function UserChatPage() {
     }
   };
 
-  // Test on component mount
+  // Test on component mount and restore chat session
   useEffect(() => {
     testConnection();
+    
+    // Restore chat session from localStorage on page load
+    const restoreChatSession = async () => {
+      try {
+        const savedSessionId = localStorage.getItem('chat_session_id');
+        if (!savedSessionId) {
+          console.log('No saved chat session found');
+          return;
+        }
+
+        console.log('🔄 Restoring chat session:', savedSessionId);
+        setDebugInfo('Restoring your chat session...');
+
+        // Check if ticket is still open
+        const { data: ticketData, error: ticketError } = await supabase
+          .from('tickets')
+          .select('id, status, session_id')
+          .eq('session_id', savedSessionId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (ticketError || !ticketData) {
+          console.log('No ticket found for session, clearing saved session');
+          localStorage.removeItem('chat_session_id');
+          return;
+        }
+
+        // If ticket is closed, don't restore
+        if (ticketData.status === 'closed') {
+          console.log('Ticket is closed, clearing saved session');
+          localStorage.removeItem('chat_session_id');
+          setChatClosed(true);
+          return;
+        }
+
+        // Restore session
+        setSessionId(savedSessionId);
+        setChatStarted(true);
+        setIsConnected(true);
+
+        // Load ticket status
+        setTicketStatus({
+          ticket_id: ticketData.id,
+          status: ticketData.status
+        });
+
+        // Load all messages
+        const { data: messages, error: messagesError } = await supabase
+          .from('chat_messages')
+          .select('*')
+          .eq('session_id', savedSessionId)
+          .order('created_at', { ascending: true });
+
+        if (!messagesError && messages) {
+          setMessages(messages.map(msg => ({
+            id: msg.id,
+            message_text: msg.message_text,
+            sender_type: msg.sender_type,
+            sender_name: msg.sender_name,
+            created_at: msg.created_at,
+            metadata: msg.metadata
+          })));
+          console.log('✅ Restored', messages.length, 'messages');
+        }
+
+        // Load user session info
+        const { data: sessionData } = await supabase
+          .from('user_sessions')
+          .select('customer_name, customer_phone')
+          .eq('session_id', savedSessionId)
+          .single();
+
+        if (sessionData) {
+          setUserName(sessionData.customer_name || '');
+          setUserPhone(sessionData.customer_phone || '');
+        }
+
+        setDebugInfo('Chat session restored successfully!');
+        console.log('✅ Chat session restored');
+      } catch (err) {
+        console.error('Error restoring chat session:', err);
+        localStorage.removeItem('chat_session_id');
+      }
+    };
+
+    restoreChatSession();
   }, []);
 
   // Initialize chat session with better error handling
@@ -205,13 +292,49 @@ export default function UserChatPage() {
 
       setSessionId(newSessionId);
       setChatStarted(true);
-      setMessages([{
-        id: messageData.id,
-        message_text: newMessage,
-        sender_type: 'user',
-        sender_name: customerName,
-        created_at: messageData.created_at
-      }]);
+      
+      // Save session_id to localStorage for persistence
+      localStorage.setItem('chat_session_id', newSessionId);
+      console.log('💾 Saved session_id to localStorage:', newSessionId);
+      
+      // Load all existing messages for this session (in case there are any)
+      try {
+        const { data: existingMessages, error: loadError } = await supabase
+          .from('chat_messages')
+          .select('*')
+          .eq('session_id', newSessionId)
+          .order('created_at', { ascending: true });
+        
+        if (!loadError && existingMessages) {
+          setMessages(existingMessages.map(msg => ({
+            id: msg.id,
+            message_text: msg.message_text,
+            sender_type: msg.sender_type,
+            sender_name: msg.sender_name,
+            created_at: msg.created_at,
+            metadata: msg.metadata
+          })));
+        } else {
+          // If loading fails, at least show the first message
+          setMessages([{
+            id: messageData.id,
+            message_text: newMessage,
+            sender_type: 'user',
+            sender_name: customerName,
+            created_at: messageData.created_at
+          }]);
+        }
+      } catch (loadErr) {
+        // Fallback to just the first message
+        setMessages([{
+          id: messageData.id,
+          message_text: newMessage,
+          sender_type: 'user',
+          sender_name: customerName,
+          created_at: messageData.created_at
+        }]);
+      }
+      
       setNewMessage('');
       setIsConnected(true);
       setDebugInfo('Chat started successfully!');
@@ -329,8 +452,8 @@ export default function UserChatPage() {
         priority: 'medium',
         category: 'support',
         assigned_agent_id: assignedAgent?.id || null,
-        channel: 'web',
-        tags: ['web', 'auto-created']
+        channel: 'web-chat',  // Fixed: changed from 'web' to 'web-chat' to match schema
+        tags: ['web-chat', 'auto-created']
       };
 
       console.log('Creating ticket:', newTicket);
@@ -576,49 +699,126 @@ export default function UserChatPage() {
     }
   };
 
-  // Real-time message subscription
+  // Real-time message subscription - Listen to ALL messages for this session
   useEffect(() => {
     if (!sessionId) return;
 
+    console.log('Setting up real-time subscription for session:', sessionId);
+
     const messageChannel = supabase
-      .channel('chat_messages_updates')
+      .channel(`chat_messages_${sessionId}_${Date.now()}`) // Unique channel name to avoid conflicts
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
-          table: 'chat_messages'
+          table: 'chat_messages',
+          filter: `session_id=eq.${sessionId}`
         },
-        (payload) => {
+        async (payload) => {
           const newMessage = payload.new;
+          console.log('📨 New message received via real-time:', {
+            id: newMessage.id,
+            sender_type: newMessage.sender_type,
+            sender_name: newMessage.sender_name,
+            message_preview: newMessage.message_text?.substring(0, 50),
+            session_id: newMessage.session_id,
+            expected_session_id: sessionId,
+            match: newMessage.session_id === sessionId
+          });
           
-          // Filter here in JS instead of the Supabase filter param
-          if (newMessage.session_id === sessionId && newMessage.sender_type !== 'user') {
-            setMessages(prev => {
-              // Remove any message with the same id before adding
-              const filtered = prev.filter(msg => msg.id !== newMessage.id);
-              return [...filtered, {
-                id: newMessage.id,
-                message_text: newMessage.message_text,
-                sender_type: newMessage.sender_type,
-                sender_name: newMessage.sender_name,
-                created_at: newMessage.created_at,
-                metadata: newMessage.metadata
-              }];
+          // Verify session_id matches (safety check)
+          if (newMessage.session_id !== sessionId) {
+            console.warn('⚠️ Session ID mismatch, ignoring message:', {
+              received: newMessage.session_id,
+              expected: sessionId
             });
-
-            if (newMessage.metadata?.ticket_status) {
-              setTicketStatus(prev => prev ? {
-                ...prev,
-                status: newMessage.metadata.ticket_status
-              } : null);
+            return;
+          }
+          
+          // Add ALL messages for this session (both user and agent/system)
+          setMessages(prev => {
+            // Check if message already exists to avoid duplicates
+            if (prev.some(msg => msg.id === newMessage.id)) {
+              console.log('⚠️ Message already exists, skipping:', newMessage.id);
+              return prev;
             }
+            
+            console.log('✅ Adding new message to chat UI:', {
+              id: newMessage.id,
+              sender_type: newMessage.sender_type,
+              sender_name: newMessage.sender_name
+            });
+            
+            return [...prev, {
+              id: newMessage.id,
+              message_text: newMessage.message_text,
+              sender_type: newMessage.sender_type,
+              sender_name: newMessage.sender_name,
+              created_at: newMessage.created_at,
+              metadata: newMessage.metadata
+            }];
+          });
+
+          // Update ticket status if metadata contains it
+          if (newMessage.metadata?.ticket_status) {
+            setTicketStatus(prev => prev ? {
+              ...prev,
+              status: newMessage.metadata.ticket_status
+            } : null);
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('📡 Real-time subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Successfully subscribed to chat messages for session:', sessionId);
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Channel subscription error for session:', sessionId);
+        } else if (status === 'TIMED_OUT') {
+          console.warn('⏱️ Subscription timed out, will retry...');
+        }
+      });
+
+    // Fallback: Periodically refresh messages (every 5 seconds) in case real-time fails
+    const refreshInterval = setInterval(async () => {
+      if (!sessionId) {
+        clearInterval(refreshInterval);
+        return;
+      }
+      
+      try {
+        const { data: latestMessages, error } = await supabase
+          .from('chat_messages')
+          .select('*')
+          .eq('session_id', sessionId)
+          .order('created_at', { ascending: true });
+        
+        if (!error && latestMessages) {
+          setMessages(prev => {
+            // Only update if we have new messages
+            if (latestMessages.length > prev.length) {
+              console.log('🔄 Fallback refresh: Found', latestMessages.length - prev.length, 'new messages');
+              return latestMessages.map(msg => ({
+                id: msg.id,
+                message_text: msg.message_text,
+                sender_type: msg.sender_type,
+                sender_name: msg.sender_name,
+                created_at: msg.created_at,
+                metadata: msg.metadata
+              }));
+            }
+            return prev;
+          });
+        }
+      } catch (err) {
+        console.error('Error in fallback refresh:', err);
+      }
+    }, 5000); // Check every 5 seconds
 
     return () => {
+      console.log('Cleaning up subscription and interval for session:', sessionId);
+      clearInterval(refreshInterval);
       supabase.removeChannel(messageChannel);
     };
   }, [sessionId]);
@@ -627,49 +827,62 @@ export default function UserChatPage() {
   useEffect(() => {
     if (!ticketStatus?.ticket_id) return;
 
+    console.log('Setting up ticket status subscription for ticket:', ticketStatus.ticket_id);
+
     const ticketChannel = supabase
-      .channel('ticket_updates')
+      .channel(`ticket_updates_${ticketStatus.ticket_id}_${Date.now()}`)
       .on(
         'postgres_changes',
         {
           event: 'UPDATE',
           schema: 'public',
-          table: 'tickets'
+          table: 'tickets',
+          filter: `id=eq.${ticketStatus.ticket_id}`
         },
         (payload) => {
           const updatedTicket = payload.new;
+          console.log('📋 Ticket status updated:', {
+            ticket_id: updatedTicket.id,
+            status: updatedTicket.status
+          });
           
-          if (updatedTicket.id === ticketStatus.ticket_id) {
-            setTicketStatus(prev => prev ? {
-              ...prev,
-              status: updatedTicket.status,
-              assigned_agent: updatedTicket.assigned_agent_name || prev.assigned_agent
-            } : null);
+          setTicketStatus(prev => prev ? {
+            ...prev,
+            status: updatedTicket.status,
+            assigned_agent: updatedTicket.assigned_agent_name || prev.assigned_agent
+          } : null);
 
-            // Check if ticket is closed
-            if (updatedTicket.status === 'closed') {
-              setChatClosed(true);
-              setIsConnected(false);
-              // Only add closure message if not already present
-              setMessages(prev => {
-                if (prev.some(m => m.sender_type === 'system' && m.message_text.includes('This chat has been closed'))) {
-                  return prev;
-                }
-                const closureMessage: ChatMessage = {
-                  id: `closure_${Date.now()}`,
-                  message_text: 'This chat has been closed. Thank you for contacting support!',
-                  sender_type: 'system',
-                  sender_name: 'Support Bot',
-                  created_at: new Date().toISOString()
-                };
-                return [...prev, closureMessage];
-              });
-              // DO NOT reset chatStarted, sessionId, or messages
-            }
+          // Check if ticket is closed
+          if (updatedTicket.status === 'closed') {
+            console.log('🔒 Ticket closed, clearing session');
+            setChatClosed(true);
+            setIsConnected(false);
+            localStorage.removeItem('chat_session_id'); // Clear saved session
+            
+            // Only add closure message if not already present
+            setMessages(prev => {
+              if (prev.some(m => m.sender_type === 'system' && m.message_text.includes('This chat has been closed'))) {
+                return prev;
+              }
+              const closureMessage: ChatMessage = {
+                id: `closure_${Date.now()}`,
+                message_text: 'This chat has been closed. Thank you for contacting support!',
+                sender_type: 'system',
+                sender_name: 'Support Bot',
+                created_at: new Date().toISOString()
+              };
+              return [...prev, closureMessage];
+            });
+            // DO NOT reset chatStarted, sessionId, or messages
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('📡 Ticket subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Successfully subscribed to ticket updates');
+        }
+      });
 
     return () => {
       supabase.removeChannel(ticketChannel);

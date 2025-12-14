@@ -15,7 +15,7 @@ const config = {
 
 let pool = null;
 
-export async function getDb() {
+async function getDb() {
   if (pool) return pool;
   pool = await sql.connect(config);
   return pool;
