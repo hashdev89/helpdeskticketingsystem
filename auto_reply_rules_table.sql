@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS auto_reply_rules (
   priority INTEGER DEFAULT 1,
   category TEXT DEFAULT 'custom' CHECK (category IN ('greeting', 'support', 'sales', 'billing', 'custom')),
   media_url TEXT,
-  whatsapp_number_id TEXT REFERENCES whatsapp_numbers(id) ON DELETE CASCADE,
+  whatsapp_number_id UUID REFERENCES whatsapp_numbers(id) ON DELETE CASCADE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
